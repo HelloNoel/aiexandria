@@ -1,0 +1,11 @@
+# Central auth config. Default location: $XDG_CONFIG_HOME/aiexandria/auth.yaml
+# Tokens are read from environment variables, never inlined unless you really mean to.
+hosts:
+  github.com:
+    token_env: GITHUB_TOKEN
+    username: git
+  gitlab.example.com:
+    token_env: GITLAB_TOKEN
+    username: oauth2
+  github.example.com:
+    token_env: PLATFORM_DOCS_TOKEN

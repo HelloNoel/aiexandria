@@ -1,0 +1,33 @@
+on:
+  push:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: docker
+    container:
+      image: rust:1.85-slim
+    steps:
+      - name: Install git and curl
+        run: apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates
+      - uses: actions/checkout@v4
+      - name: Install mdbook
+        run: cargo install --locked mdbook --version ^0.4
+      - name: Build site
+        run: mdbook build
+      - name: Publish to pages branch
+        env:
+          PUSH_TOKEN: ${{ secrets.PAGES_PUSH_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          cd book
+          git init -b pages
+          git config user.name "Forgejo Actions"
+          git config user.email "actions@local"
+          touch .nojekyll
+          git add .
+          git commit -m "publish: ${GITHUB_SHA::7}"
+          git remote add origin "https://${ACTOR}:${PUSH_TOKEN}@codeberg.org/${REPO}.git"
+          git push --force origin pages

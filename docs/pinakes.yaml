@@ -1,0 +1,26 @@
+version: 1
+name: AIexandria
+description: >
+  AIexandria's own documentation. Covers installation, registry/auth config,
+  refresh policy, command sandbox, and the index YAML schema.
+
+entries:
+  - id: getting-started
+    name: Getting Started
+    description: >
+      How to install AIexandria, configure a registry, wire it into Claude
+      Code, and write or generate a pinakes.yaml.
+    kind: doc
+    path: docs/getting-started.md
+
+  - id: readme
+    name: README
+    description: Project overview and feature summary
+    kind: doc
+    path: README.md
+
+  - id: license
+    name: License
+    description: Apache-2.0 license text
+    kind: doc
+    path: LICENSE

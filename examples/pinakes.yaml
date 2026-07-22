@@ -1,0 +1,48 @@
+# Example AIexandria index, intended to live at the root of a docs repo.
+#
+# AIexandria walks this hierarchy on demand. Each entry has a `kind`:
+#   - doc:     a single text file the LLM can read
+#   - index:   a child index (resolved when the LLM descends into it)
+#   - merge:   inline another index's entries here, so multiple contributors
+#              can publish partial indexes without each maintaining a full one
+#   - command: a custom retrieval command (RAG, ripgrep, ...) sandboxed by
+#              the inherited `command_policy.allow` regex
+
+version: 1
+name: example-project
+description: "Top-level docs for example-project"
+
+# Allow only ripgrep over the docs/ directory for any `command` entry below.
+# Children may further narrow this regex but cannot widen it.
+command_policy:
+  allow: '^rg( -[A-Za-z]+)* [^;&|`$]+ docs/'
+  timeout_secs: 10
+
+entries:
+  - id: getting-started
+    name: Getting started
+    description: "Install and run example-project locally"
+    kind: doc
+    path: docs/getting-started.md
+
+  - id: api
+    name: API reference
+    description: "REST endpoints, request/response shapes, error codes"
+    kind: index
+    path: docs/api/index.yaml
+
+  - id: shared-runbooks
+    name: Shared runbooks
+    description: "Operational runbooks maintained by the SRE team"
+    kind: merge
+    repo:
+      url: https://github.com/example-org/sre-runbooks.git
+      branch: main
+    path: pinakes.yaml
+    prefix: "runbook-"
+
+  - id: search
+    name: Full-text search
+    description: "Substring search over docs/ via ripgrep. Pass a query string."
+    kind: command
+    argv: ["rg", "--max-count", "20", "{query}", "docs/"]

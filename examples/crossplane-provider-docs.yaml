@@ -1,0 +1,50 @@
+# Index for https://github.com/SAP/crossplane-provider-docs
+#
+# Generated initially by `aiexandria generate --repo <url>`, then hand-curated:
+# - meaningful name + description
+# - dropped LICENSES/ (not useful to an LLM)
+# - per-entry descriptions added so the LLM can pick well
+#
+# To use: drop this in the docs repo as `pinakes.yaml`, or point a registry
+# entry at this file via a fork/PR. The submodule references in
+# `docs/pinakes.yaml` (also generated) let AIexandria recurse into each
+# provider's own repo without you needing to bundle their content.
+
+version: 1
+name: crossplane-provider-docs
+description: >
+  SAP's Crossplane providers — Docusaurus site that aggregates docs for
+  multiple Crossplane providers (BTP, CloudFoundry, Hana, xp-clifford) plus
+  contribution guides. Sub-provider docs live in git submodules.
+
+command_policy:
+  allow: '^rg( -[A-Za-z]+)*( --[A-Za-z-]+(=[^ ]+)?)* [^;&|`$]+$'
+  timeout_secs: 15
+
+entries:
+  - id: readme
+    name: README
+    description: Top-level project README — what this site is and how to run it locally
+    kind: doc
+    path: README.md
+
+  - id: contributing
+    name: CONTRIBUTING
+    description: How to contribute to the docs site
+    kind: doc
+    path: CONTRIBUTING.md
+
+  - id: docs
+    name: Docs sections
+    description: >
+      Drill down into per-provider docs (BTP, CloudFoundry, Hana, xp-clifford),
+      the SAP CAP guide, and the contribution playbook. Each provider is a git
+      submodule resolved to its own repo.
+    kind: index
+    path: docs/pinakes.yaml
+
+  - id: search
+    name: Full-text search
+    description: Substring search across the whole docs tree via ripgrep
+    kind: command
+    argv: ["rg", "--max-count", "20", "{query}", "."]

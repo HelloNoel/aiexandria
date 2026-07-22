@@ -1,0 +1,16 @@
+[book]
+title = "AIexandria"
+description = "MCP server that gives LLMs hierarchical access to git-hosted documentation"
+authors = ["Noel Chia"]
+language = "en"
+src = "docs"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://codeberg.org/your-user/aiexandria"
+edit-url-template = "https://codeberg.org/your-user/aiexandria/_edit/master/docs/{path}"
+
+[output.html.fold]
+enable = true
+level = 1
