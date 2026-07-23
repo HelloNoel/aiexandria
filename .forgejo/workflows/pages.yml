@@ -3,11 +3,17 @@ on:
   push:
     branches: [main]
 
+env:
+  GIT_DEFAULT_HASH: sha256
+
 jobs:
   publish:
     runs-on: codeberg-tiny
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
       - name: Install mdbook
         run: |
           mkdir -p "$HOME/bin"
