@@ -56,9 +56,10 @@ for a real-world example produced this way.
 
 ## Running
 
-See [docs/getting-started.md](docs/getting-started.md) for an end-to-end
-walkthrough that installs AIexandria, publishes an index, and wires it into
-Claude Code as an MCP server.
+See the [getting-started guide](https://hellonoel.codeberg.page/AIexandria/getting-started.html)
+(or the [source](docs/getting-started.md)) for an end-to-end walkthrough that
+installs AIexandria, publishes an index, and wires it into Claude Code as an
+MCP server.
 
 Quick version:
 

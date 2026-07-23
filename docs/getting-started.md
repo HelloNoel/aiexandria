@@ -5,7 +5,43 @@ some docs, and wiring it into Claude Code as an MCP server.
 
 ## 1. Install AIexandria
 
-From source (only option today):
+### Option A: prebuilt binary (recommended)
+
+Download the archive for your platform from the
+[latest release](https://codeberg.org/HelloNoel/AIexandria/releases/latest):
+
+| Platform | Asset |
+| --- | --- |
+| macOS (Apple Silicon) | `aiexandria-<version>-aarch64-apple-darwin.tar.gz` |
+| macOS (Intel) | `aiexandria-<version>-x86_64-apple-darwin.tar.gz` |
+| Linux (x86_64) | `aiexandria-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows (x86_64) | `aiexandria-<version>-x86_64-pc-windows-gnu.zip` |
+
+Extract it and move `aiexandria` onto your `PATH`:
+
+```sh
+tar -xzf aiexandria-*-apple-darwin.tar.gz
+mkdir -p ~/.local/bin
+mv aiexandria ~/.local/bin/          # make sure ~/.local/bin is on your PATH
+```
+
+Optionally verify the download against the release's `SHA256SUMS`:
+
+```sh
+shasum -a 256 -c SHA256SUMS
+```
+
+On macOS the binary is unsigned, so the first run is blocked by Gatekeeper
+("cannot be opened because the developer cannot be verified"). Clear the
+quarantine flag once:
+
+```sh
+xattr -d com.apple.quarantine ~/.local/bin/aiexandria
+```
+
+### Option B: build from source
+
+Needs a Rust toolchain (`rustup`).
 
 ```sh
 git clone https://codeberg.org/HelloNoel/AIexandria.git aiexandria
@@ -13,7 +49,9 @@ cd aiexandria
 cargo install --path .
 ```
 
-This drops `aiexandria` into `~/.cargo/bin`. Verify:
+This drops `aiexandria` into `~/.cargo/bin`.
+
+### Verify
 
 ```sh
 aiexandria --help
