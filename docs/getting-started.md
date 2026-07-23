@@ -8,7 +8,7 @@ some docs, and wiring it into Claude Code as an MCP server.
 From source (only option today):
 
 ```sh
-git clone <this repo> aiexandria
+git clone https://codeberg.org/HelloNoel/AIexandria.git aiexandria
 cd aiexandria
 cargo install --path .
 ```
