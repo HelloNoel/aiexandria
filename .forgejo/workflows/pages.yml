@@ -1,21 +1,21 @@
 name: pages
 on:
   push:
-    branches: [master]
+    branches: [main]
 
 jobs:
   publish:
-    runs-on: docker
-    container:
-      image: rust:1.85-slim
+    runs-on: codeberg-tiny
     steps:
-      - name: Install prerequisites
-        run: apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates
       - uses: actions/checkout@v4
       - name: Install mdbook
-        run: cargo install --locked mdbook --version ^0.4
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.52/mdbook-v0.4.52-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C "$HOME/bin"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
       - name: Build site
-        run: mdbook build
+        run: "$HOME/bin/mdbook build"
       - uses: https://codeberg.org/git-pages/action@v2
         with:
           site: https://hellonoel.codeberg.page/AIexandria/
