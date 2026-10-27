@@ -811,7 +811,7 @@ entries:
                 "root".into(),
                 RegistryEntry {
                     repo: GitRef {
-                        url: format!("file://{}", repo_dir.display()),
+                        url: url::Url::from_file_path(&repo_dir).unwrap().to_string(),
                         branch: Some("main".into()),
                         ..GitRef::default()
                     },
