@@ -31,10 +31,7 @@ entries:
     kind: index
     path: docs/api/index.yaml
 
-  - id: shared-runbooks
-    name: Shared runbooks
-    description: "Operational runbooks maintained by the SRE team"
-    kind: merge
+  - kind: merge
     repo:
       url: https://github.com/example-org/sre-runbooks.git
       branch: main

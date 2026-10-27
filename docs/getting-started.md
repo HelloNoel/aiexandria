@@ -230,9 +230,10 @@ Claude will call:
 
 1. `list_indexes` — to see what's available
 2. `list_docs` with `index: "my-project"` — to see the entries
-3. `read_doc` for the relevant leaf, or `search_docs` (optionally `deep: true`,
-   or with `command_id: "search"` to run your `rg` command); follow up on a
-   search hit with `read_file` to fetch the whole file
+3. `read_doc` for the relevant leaf, `read_url` for a pasted repository link,
+   or `search_docs` (optionally with `deep: true`, or with `command_id: "search"`
+   to run your `rg` command); follow up on a search hit with `read_file` to
+   fetch the whole file
 
 You can confirm the server is healthy with `/mcp` inside Claude Code; it
 should show `AIexandria` as connected with its tools listed.

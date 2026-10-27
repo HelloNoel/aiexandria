@@ -120,6 +120,62 @@ fn resolves_root_lists_entries_reads_doc_and_descends() {
 }
 
 #[test]
+fn rejects_duplicate_ids_after_merge_flattening() {
+    let tmp = TempDir::new().unwrap();
+    let repo_dir = tmp.path().join("repo");
+    let url = make_docs_repo(&repo_dir);
+    write(
+        &repo_dir.join("pinakes.yaml"),
+        r#"
+version: 1
+name: duplicates
+entries:
+  - id: same
+    name: Local
+    kind: doc
+    path: README.md
+  - kind: merge
+    path: shared.yaml
+"#,
+    );
+    write(
+        &repo_dir.join("shared.yaml"),
+        r#"
+version: 1
+name: shared
+entries:
+  - id: same
+    name: Merged
+    kind: doc
+    path: README.md
+"#,
+    );
+    let repo = Repository::open(&repo_dir).unwrap();
+    let mut index = repo.index().unwrap();
+    index
+        .add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let parent = repo.head().unwrap().peel_to_commit().unwrap();
+    let sig = Signature::now("test", "test@example.com").unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "duplicates", &tree, &[&parent])
+        .unwrap();
+
+    let cache = cache(tmp.path());
+    let resolver = Resolver::new(&cache);
+    let git_ref = GitRef {
+        url,
+        branch: Some("main".into()),
+        ..Default::default()
+    };
+    let error = resolver
+        .load_index(&git_ref, "pinakes.yaml", &CommandPolicyChain::default())
+        .unwrap_err();
+    assert!(error.to_string().contains("duplicate entry id 'same'"));
+}
+
+#[test]
 fn command_policy_allows_matching_and_denies_others() {
     let tmp = TempDir::new().unwrap();
     let url = make_docs_repo(&tmp.path().join("repo"));

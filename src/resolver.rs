@@ -130,6 +130,15 @@ impl<'a> Resolver<'a> {
             }
         }
 
+        let mut ids = HashSet::new();
+        for entry in &resolved {
+            if !ids.insert(entry.view.id.clone()) {
+                return Err(AIexError::DuplicateId {
+                    id: entry.view.id.clone(),
+                    location: format!("{}:{rel_path}", origin.url),
+                });
+            }
+        }
         visited.remove(&key);
 
         Ok(LoadedIndex {
@@ -221,17 +230,15 @@ fn build_view(entry: &Entry, merge_prefix: Option<&str>) -> EntryView {
 }
 
 fn slugify(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string()
+    let mut slug = String::new();
+    for c in s.chars() {
+        if c.is_alphanumeric() {
+            slug.extend(c.to_lowercase());
+        } else {
+            slug.push('-');
+        }
+    }
+    slug.trim_matches('-').to_string()
 }
 
 /// Helper used by the MCP tool: walk into a child index by `child_path` from a
@@ -254,3 +261,13 @@ pub fn descend<'a>(
 // keep import even if unused depending on call sites
 #[allow(dead_code)]
 fn _path_marker(_: &Path) {}
+
+#[cfg(test)]
+mod tests {
+    use super::slugify;
+
+    #[test]
+    fn slugify_lowercases_unicode_alphanumerics() {
+        assert_eq!(slugify("ÉTÉ Über ΑΒ"), "été-über-αβ");
+    }
+}

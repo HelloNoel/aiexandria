@@ -5,7 +5,7 @@
 //! the allow-regex, never widen it: a command must match the regex of every
 //! policy in the chain.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -18,7 +18,6 @@ use crate::index::CommandPolicy;
 pub struct CommandPolicyChain {
     /// All allow-regexes encountered, top-down. Empty = deny all.
     allows: Vec<CompiledAllow>,
-    cwd: Option<PathBuf>,
     timeout: Duration,
 }
 
@@ -32,7 +31,6 @@ impl Default for CommandPolicyChain {
     fn default() -> Self {
         Self {
             allows: Vec::new(),
-            cwd: None,
             timeout: Duration::from_secs(30),
         }
     }
@@ -53,9 +51,6 @@ impl CommandPolicyChain {
                 pattern: allow.clone(),
                 regex,
             });
-        }
-        if let Some(cwd) = &p.cwd {
-            next.cwd = Some(PathBuf::from(cwd));
         }
         if let Some(t) = p.timeout_secs {
             next.timeout = Duration::from_secs(t);
@@ -102,15 +97,9 @@ pub fn run_command(
     let command_line = shell_words::join(&expanded);
     policy.check(&command_line)?;
 
-    let cwd = policy
-        .cwd
-        .clone()
-        .map(|c| if c.is_absolute() { c } else { repo_dir.join(c) })
-        .unwrap_or_else(|| repo_dir.to_path_buf());
-
     let mut child = std::process::Command::new(&expanded[0])
         .args(&expanded[1..])
-        .current_dir(&cwd)
+        .current_dir(repo_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -190,14 +179,12 @@ mod tests {
         let parent = CommandPolicyChain::default()
             .extend(Some(&CommandPolicy {
                 allow: Some("^rg ".into()),
-                cwd: None,
                 timeout_secs: None,
             }))
             .unwrap();
         let child = parent
             .extend(Some(&CommandPolicy {
                 allow: Some("docs".into()),
-                cwd: None,
                 timeout_secs: None,
             }))
             .unwrap();
@@ -214,7 +201,6 @@ mod tests {
         let policy = CommandPolicyChain::default()
             .extend(Some(&CommandPolicy {
                 allow: Some("^sh ".into()),
-                cwd: None,
                 timeout_secs: None,
             }))
             .unwrap();

@@ -2,3 +2,7 @@
 /CLAUDE.local.md
 /book
 /dist
+/.serena
+/.claude/
+/.playwright-mcp/
+.DS_Store

@@ -49,7 +49,9 @@ subdirectories as `index` entries, turns submodule paths into `index`
 entries that point at the submodule's *own* repo, and (with the default
 `--no-nested` off) writes nested `pinakes.yaml` files into each
 subdirectory. Treat the output as a starting point — add `description:`
-fields to help the LLM pick, and drop entries you don't want exposed.
+fields to help the LLM pick, and drop entries that do not help navigation.
+Referencing a repo authorizes repo-root-sandboxed reads from that checkout;
+`doc` entries curate the navigation tree rather than form a file allow-list.
 
 See [examples/crossplane-provider-docs.yaml](examples/crossplane-provider-docs.yaml)
 for a real-world example produced this way.
@@ -90,6 +92,8 @@ the configured interval has elapsed. There's no background scheduler.
 - `read_doc` — fetch a `doc` entry's contents
 - `read_file` — fetch any file from an entry's repo by path (e.g. to follow
   up on a `search_docs` hit); sandboxed to the repo root
+- `read_url` — fetch an indexed repository file directly from a GitHub,
+  Codeberg, Forgejo, or Gitea URL
 - `search_docs` — substring search over names/descriptions (pass `deep: true`
   to also grep doc contents), or run a `command` entry with a query
 

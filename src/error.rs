@@ -40,6 +40,9 @@ pub enum AIexError {
     #[error("merge cycle detected at {repo}#{path}")]
     MergeCycle { repo: String, path: String },
 
+    #[error("duplicate entry id '{id}' in index {location}")]
+    DuplicateId { id: String, location: String },
+
     #[error("repository is still being fetched (cold start); retry in a few seconds: {url}")]
     Warming { url: String },
 
