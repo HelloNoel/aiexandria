@@ -14,6 +14,7 @@ Download the archive for your platform from the
 | --- | --- |
 | macOS (Apple Silicon) | `aiexandria-<version>-aarch64-apple-darwin.tar.gz` |
 | macOS (Intel) | `aiexandria-<version>-x86_64-apple-darwin.tar.gz` |
+| Linux (ARM64) | `aiexandria-<version>-aarch64-unknown-linux-gnu.tar.gz` |
 | Linux (x86_64) | `aiexandria-<version>-x86_64-unknown-linux-gnu.tar.gz` |
 | Windows (x86_64) | `aiexandria-<version>-x86_64-pc-windows-gnu.zip` |
 
