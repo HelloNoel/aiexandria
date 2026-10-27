@@ -502,7 +502,7 @@ impl AIexandriaServer {
         let dir = self
             .inner
             .cache
-            .ensure(&entry.origin)
+            .ensure_with(&entry.origin, entry.refresh)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let body = self
             .inner
@@ -640,7 +640,7 @@ impl ServerHandler for AIexandriaServer {
              drills into one by entry id; `read_doc` fetches a leaf doc; `search_docs` \
              does substring matching over names/descriptions, or — with `deep: true` — \
              also greps doc contents at the current level (5 snippets per doc, capped). \
-             With `command_id`, `search_docs` runs that index's sandboxed command entry \
+             With `command_id`, `search_docs` runs that index's policy-controlled command entry \
              (e.g. ripgrep) instead of substring search. After a `command_id` search, \
              use `read_file` with the same `entry_id` and a path from the search output \
               to fetch the full file. When the user provides a web file URL, prefer \
@@ -837,7 +837,6 @@ entries:
 #[cfg(test)]
 mod url_lookup_tests {
     use super::*;
-    use sha2::{Digest, Sha256};
     fn reference(url: &str) -> GitRef {
         GitRef {
             url: url.into(),
@@ -846,9 +845,10 @@ mod url_lookup_tests {
         }
     }
     fn cached(root: &std::path::Path, git: &GitRef, yaml: &str) {
-        let hash = Sha256::digest(git.url.as_bytes());
-        let dir = root.join(hex::encode(&hash[..8])).join("main");
+        let cache = RepoCache::new(root.into(), crate::auth::AuthConfig::default());
+        let dir = cache.path_for(git);
         git2::Repository::init(&dir).unwrap();
+        std::fs::write(dir.join(".git/aiexandria-ready"), b"1").unwrap();
         std::fs::write(dir.join("pinakes.yaml"), yaml).unwrap();
     }
     fn server(root: &std::path::Path, yaml: &str) -> AIexandriaServer {

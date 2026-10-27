@@ -4,7 +4,7 @@
 //! from a git repository. Entries are either:
 //!  - `doc`: a leaf pointing at a text file in some repo
 //!  - `index`: another index file (same repo or a different one) — resolved on demand
-//!  - `command`: a custom retrieval command (e.g. RAG / search) executed in a sandbox
+//!  - `command`: a custom retrieval command (e.g. RAG / search) executed under command policy
 //!  - `merge`: pulls another index in and exposes its entries inline so multiple
 //!    contributors can compose without each maintaining a full copy
 //!
@@ -77,6 +77,16 @@ impl GitRef {
     }
 
     pub fn validate(&self) -> crate::error::Result<()> {
+        require_nonempty(&self.url, "repository URL")?;
+        for (name, value) in [
+            ("branch", &self.branch),
+            ("tag", &self.tag),
+            ("token_env", &self.token_env),
+        ] {
+            if let Some(value) = value {
+                require_nonempty(value, name)?;
+            }
+        }
         let ref_count = [
             self.branch.is_some(),
             self.tag.is_some(),
@@ -194,7 +204,7 @@ pub struct Index {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
-    /// Command sandboxing policy applied to every `command` descendant of this index.
+    /// Command execution policy applied to every `command` descendant of this index.
     /// Children may further restrict but cannot widen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_policy: Option<CommandPolicy>,
@@ -204,24 +214,34 @@ pub struct Index {
 
 impl Index {
     pub fn parse(yaml: &str, source: &str) -> crate::error::Result<Self> {
-        let raw: Value = serde_yaml::from_str(yaml).map_err(|source_err| {
-            crate::error::AIexError::Yaml {
+        let raw: Value =
+            serde_yaml::from_str(yaml).map_err(|source_err| crate::error::AIexError::Yaml {
                 path: source.to_string(),
                 source: source_err,
-            }
-        })?;
+            })?;
+        reject_null_values(&raw)?;
         validate_index_shape(&raw, source)?;
-        let index: Self = serde_yaml::from_value(raw).map_err(|source_err| {
-            crate::error::AIexError::Yaml {
+        let index: Self =
+            serde_yaml::from_value(raw).map_err(|source_err| crate::error::AIexError::Yaml {
                 path: source.to_string(),
                 source: source_err,
-            }
-        })?;
+            })?;
         if index.version != SUPPORTED_VERSION {
             return Err(crate::error::AIexError::Other(format!(
                 "unsupported pinakes version {} in {source}; supported version is {SUPPORTED_VERSION}",
                 index.version
             )));
+        }
+        require_nonempty(&index.name, "index name")?;
+        if let Some(policy) = &index.command_policy {
+            if let Some(allow) = &policy.allow {
+                require_nonempty(allow, "command allow pattern")?;
+            }
+            if policy.timeout_secs == Some(0) {
+                return Err(crate::error::AIexError::Other(
+                    "command timeout must be positive".into(),
+                ));
+            }
         }
         for entry in &index.entries {
             if !matches!(entry.kind, EntryKind::Merge { .. }) && entry.name.is_empty() {
@@ -232,8 +252,72 @@ impl Index {
             if let Some(repo) = entry_repo(&entry.kind) {
                 repo.validate()?;
             }
+            if let Some(id) = &entry.id {
+                require_nonempty(id, "entry id")?;
+            }
+            if !matches!(entry.kind, EntryKind::Merge { .. })
+                && entry.id.is_none()
+                && !entry.name.chars().any(char::is_alphanumeric)
+            {
+                return Err(crate::error::AIexError::Other(
+                    "entry name produces an empty id; provide an explicit id".into(),
+                ));
+            }
+            match &entry.kind {
+                EntryKind::Doc { path, .. }
+                | EntryKind::Index { path, .. }
+                | EntryKind::Merge { path, .. } => require_nonempty(path, "entry path")?,
+                EntryKind::Command {
+                    argv,
+                    success_exit_codes,
+                    ..
+                } => {
+                    let executable = argv.first().ok_or_else(|| {
+                        crate::error::AIexError::Other("command argv must not be empty".into())
+                    })?;
+                    require_nonempty(executable, "command executable")?;
+                    if success_exit_codes
+                        .iter()
+                        .any(|code| !(0..=255).contains(code))
+                    {
+                        return Err(crate::error::AIexError::Other(
+                            "success exit codes must be between 0 and 255".into(),
+                        ));
+                    }
+                }
+            }
         }
         Ok(index)
+    }
+}
+
+pub(crate) fn require_nonempty(value: &str, field: &str) -> crate::error::Result<()> {
+    if value.is_empty() {
+        return Err(crate::error::AIexError::Other(format!(
+            "{field} must not be empty"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn reject_null_values(value: &Value) -> crate::error::Result<()> {
+    match value {
+        Value::Null => Err(crate::error::AIexError::Other(
+            "null is not a valid pinakes field value; omit optional fields instead".into(),
+        )),
+        Value::Mapping(map) => {
+            for value in map.values() {
+                reject_null_values(value)?;
+            }
+            Ok(())
+        }
+        Value::Sequence(items) => {
+            for value in items {
+                reject_null_values(value)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 
@@ -363,7 +447,7 @@ entries:
     prefix: shared/
   - name: search
     kind: command
-    argv: ["rg", "{query}", "docs/"]
+    argv: ["rg", "--", "{query}", "docs/"]
 "#;
         let idx = Index::parse(y, "test").unwrap();
         assert_eq!(idx.entries.len(), 4);

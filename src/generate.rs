@@ -10,7 +10,8 @@
 //! `description:` fields to help the LLM choose, and add `command:` entries
 //! for things like ripgrep.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -67,20 +68,19 @@ impl Default for GenerateOptions {
 /// (and, if `write_nested`, for each nested directory). Returns the YAML body
 /// for the root index; caller decides whether to write it.
 pub fn generate_index(repo_root: &Path, opts: &GenerateOptions) -> Result<String> {
+    let canonical_root = repo_root.canonicalize()?;
+    let repo_root = canonical_root.as_path();
     let root_index = build_index(repo_root, repo_root, opts)?;
     let yaml = serde_yaml::to_string(&root_index)
         .map_err(|e| AIexError::Other(format!("serializing generated index: {e}")))?;
+    crate::index::Index::parse(&yaml, "generated root")?;
     if opts.write_nested && opts.recursive {
         write_nested_indexes(repo_root, repo_root, opts)?;
     }
     Ok(yaml)
 }
 
-fn build_index(
-    repo_root: &Path,
-    dir: &Path,
-    opts: &GenerateOptions,
-) -> Result<GeneratedIndex> {
+fn build_index(repo_root: &Path, dir: &Path, opts: &GenerateOptions) -> Result<GeneratedIndex> {
     let rel = dir.strip_prefix(repo_root).unwrap_or(dir);
     let name = if rel.as_os_str().is_empty() {
         repo_root
@@ -102,11 +102,14 @@ fn build_index(
     children.sort();
 
     for path in children {
+        if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
+            continue;
+        }
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         if file_name.starts_with('.') && file_name != ".gitmodules" {
             continue;
         }
-        if SKIP_DIRS.iter().any(|s| *s == file_name) {
+        if SKIP_DIRS.contains(&file_name) {
             continue;
         }
         let rel_to_root = path
@@ -169,11 +172,30 @@ fn build_index(
         }
     }
 
+    let mut used_ids = HashSet::new();
+    if opts.include_search_command && rel.as_os_str().is_empty() {
+        used_ids.insert("search".to_string());
+    }
+    for entry in &mut entries {
+        let base = entry
+            .id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .unwrap_or("entry")
+            .to_string();
+        let mut id = base.clone();
+        let mut suffix = 2;
+        while !used_ids.insert(id.clone()) {
+            id = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        entry.id = Some(id);
+    }
     let mut command_policy = None;
     if opts.include_search_command && rel.as_os_str().is_empty() {
         // Only attach a policy + search command at the root.
         command_policy = Some(GeneratedPolicy {
-            allow: r#"^rg( -[A-Za-z]+)*( --[A-Za-z-]+(=[^ ]+)?)* [^;&|`$]+$"#.into(),
+            allow: r#"^rg --max-count 20 -- .+ [.]$"#.into(),
             timeout_secs: 15,
         });
         entries.push(GeneratedEntry {
@@ -187,6 +209,7 @@ fn build_index(
                 "rg".into(),
                 "--max-count".into(),
                 "20".into(),
+                "--".into(),
                 "{query}".into(),
                 ".".into(),
             ]),
@@ -203,19 +226,15 @@ fn build_index(
     })
 }
 
-fn write_nested_indexes(
-    repo_root: &Path,
-    dir: &Path,
-    opts: &GenerateOptions,
-) -> Result<()> {
+fn write_nested_indexes(repo_root: &Path, dir: &Path, opts: &GenerateOptions) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if !path.is_dir()
-            || file_name.starts_with('.')
-            || SKIP_DIRS.iter().any(|s| *s == file_name)
-        {
+        if !path.is_dir() || file_name.starts_with('.') || SKIP_DIRS.contains(&file_name) {
             continue;
         }
         // Don't walk into submodules; they manage their own indexes.
@@ -234,7 +253,25 @@ fn write_nested_indexes(
         let nested = build_index(repo_root, &path, opts)?;
         let body = serde_yaml::to_string(&nested)
             .map_err(|e| AIexError::Other(format!("serializing nested index: {e}")))?;
-        std::fs::write(path.join(INDEX_FILENAME), body)?;
+        crate::index::Index::parse(&body, &path.display().to_string())?;
+        let canonical = path.canonicalize()?;
+        if !canonical.starts_with(repo_root) {
+            return Err(AIexError::Other(
+                "generated index directory escapes repository".into(),
+            ));
+        }
+        let destination = canonical.join(INDEX_FILENAME);
+        if std::fs::symlink_metadata(&destination).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(AIexError::Other(format!(
+                "refusing to overwrite index symlink: {}",
+                destination.display()
+            )));
+        }
+        let mut output = tempfile::NamedTempFile::new_in(&canonical)?;
+        output.write_all(body.as_bytes())?;
+        output
+            .persist(&destination)
+            .map_err(|e| AIexError::Io(e.error))?;
         write_nested_indexes(repo_root, &path, opts)?;
     }
     Ok(())
@@ -246,14 +283,20 @@ fn read_submodules(repo_root: &Path) -> Result<BTreeMap<String, String>> {
     if !path.exists() {
         return Ok(out);
     }
+    if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
+        return Err(AIexError::Other(
+            "refusing to read a symlinked .gitmodules".into(),
+        ));
+    }
     let body = std::fs::read_to_string(&path)?;
     let mut current_path: Option<String> = None;
     let mut current_url: Option<String> = None;
-    let flush = |p: &mut Option<String>, u: &mut Option<String>, out: &mut BTreeMap<String, String>| {
-        if let (Some(p), Some(u)) = (p.take(), u.take()) {
-            out.insert(p, u);
-        }
-    };
+    let flush =
+        |p: &mut Option<String>, u: &mut Option<String>, out: &mut BTreeMap<String, String>| {
+            if let (Some(p), Some(u)) = (p.take(), u.take()) {
+                out.insert(p, u);
+            }
+        };
     for line in body.lines() {
         let line = line.trim();
         if line.starts_with('[') {
@@ -277,9 +320,12 @@ fn directory_has_docs(dir: &Path) -> bool {
         return false;
     };
     for e in rd.flatten() {
+        if e.file_type().map_or(true, |t| t.is_symlink()) {
+            continue;
+        }
         let p = e.path();
         let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if name.starts_with('.') || SKIP_DIRS.iter().any(|s| *s == name) {
+        if name.starts_with('.') || SKIP_DIRS.contains(&name) {
             continue;
         }
         if p.is_file() && is_doc_file(&p) {
@@ -318,8 +364,7 @@ fn slugify(s: &str) -> String {
 
 fn prettify(stem: &str) -> String {
     // "0-understand-providers" -> "Understand providers"
-    let stripped = stem
-        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '-' || c == '_');
+    let stripped = stem.trim_start_matches(|c: char| c.is_ascii_digit() || c == '-' || c == '_');
     let cleaned = stripped.replace(['-', '_'], " ");
     let mut out = String::new();
     let mut chars = cleaned.chars();

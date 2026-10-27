@@ -6,7 +6,7 @@ hosted in git repos — public or private, with submodules, behind tokens
 or SSH agents.
 
 A docs author writes a small `pinakes.yaml` index file in their repo listing
-documents, sub-indexes, and sandboxed search commands. Referencing a repository
+documents, sub-indexes, and policy-controlled search commands. Referencing a repository
 grants repo-root-sandboxed read access to its checkout; document entries curate
 navigation and are not a per-file allow-list. AIexandria clones the repo on
 demand, refreshes it lazily, and exposes six MCP tools: `list_indexes`,

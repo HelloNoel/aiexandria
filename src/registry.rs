@@ -60,7 +60,9 @@ impl Serialize for RefreshSetting {
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         match self {
             RefreshSetting::Never => s.serialize_str("never"),
-            RefreshSetting::Every(d) => s.serialize_str(&humantime::format_duration(*d).to_string()),
+            RefreshSetting::Every(d) => {
+                s.serialize_str(&humantime::format_duration(*d).to_string())
+            }
         }
     }
 }
@@ -90,7 +92,30 @@ impl RegistryConfig {
             path: path.display().to_string(),
             source: e,
         })?;
+        let raw = serde_yaml::from_str(&body).map_err(|source| AIexError::Yaml {
+            path: path.display().to_string(),
+            source,
+        })?;
+        crate::index::reject_null_values(&raw)?;
+        if registry.indexes.is_empty() {
+            return Err(AIexError::Other(
+                "registry must contain at least one index".into(),
+            ));
+        }
         for (name, entry) in &registry.indexes {
+            if !name
+                .bytes()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric())
+                || !name
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+            {
+                return Err(AIexError::Other(format!(
+                    "invalid registry index name '{name}'"
+                )));
+            }
+            crate::index::require_nonempty(&entry.path, "registry index path")?;
             entry.repo.validate().map_err(|error| {
                 AIexError::Other(format!("invalid registry entry '{name}': {error}"))
             })?;

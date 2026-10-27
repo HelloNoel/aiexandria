@@ -5,7 +5,7 @@
 #   - index:   a child index (resolved when the LLM descends into it)
 #   - merge:   inline another index's entries here, so multiple contributors
 #              can publish partial indexes without each maintaining a full one
-#   - command: a custom retrieval command (RAG, ripgrep, ...) sandboxed by
+#   - command: a custom retrieval command (RAG, ripgrep, ...) controlled by
 #              the inherited `command_policy.allow` regex
 
 version: 1
@@ -15,7 +15,7 @@ description: "Top-level docs for example-project"
 # Allow only ripgrep over the docs/ directory for any `command` entry below.
 # Children may further narrow this regex but cannot widen it.
 command_policy:
-  allow: '^rg( -[A-Za-z]+)* [^;&|`$]+ docs/'
+  allow: '^rg --max-count 20 -- .+ docs/$'
   timeout_secs: 10
 
 entries:
@@ -42,4 +42,4 @@ entries:
     name: Full-text search
     description: "Substring search over docs/ via ripgrep. Pass a query string."
     kind: command
-    argv: ["rg", "--max-count", "20", "{query}", "docs/"]
+    argv: ["rg", "--max-count", "20", "--", "{query}", "docs/"]

@@ -29,6 +29,8 @@ pub struct ResolvedEntry {
     pub entry: Entry,
     pub origin: GitRef,
     pub policy: CommandPolicyChain,
+    pub refresh: RefreshPolicy,
+    ancestry: HashSet<PathBuf>,
 }
 
 pub struct Resolver<'a> {
@@ -61,7 +63,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Like [`load_index`] but applies an explicit refresh policy to the root repo.
-    /// Sub-indexes/merges still use the cache's default.
+    /// The override follows the entire index tree and its referenced repositories.
     pub fn load_index_with_refresh(
         &self,
         origin: &GitRef,
@@ -79,10 +81,11 @@ impl<'a> Resolver<'a> {
         rel_path: &str,
         parent_policy: &CommandPolicyChain,
         refresh: RefreshPolicy,
-        visited: &mut HashSet<String>,
+        visited: &mut HashSet<PathBuf>,
         merge_prefix: Option<&str>,
     ) -> Result<LoadedIndex> {
-        let key = format!("{}#{}", origin.url, rel_path);
+        let repo_dir = self.cache.ensure_with(origin, refresh)?;
+        let key = repo_dir.join(rel_path).canonicalize()?;
         if !visited.insert(key.clone()) {
             return Err(AIexError::MergeCycle {
                 repo: origin.url.clone(),
@@ -90,7 +93,6 @@ impl<'a> Resolver<'a> {
             });
         }
 
-        let repo_dir = self.cache.ensure_with(origin, refresh)?;
         let body = self.cache.read_file(&repo_dir, rel_path)?;
         let index = Index::parse(&body, &format!("{}:{rel_path}", origin.url))?;
 
@@ -111,7 +113,7 @@ impl<'a> Resolver<'a> {
                         &merge_origin,
                         path,
                         &policy,
-                        self.cache.default_refresh(),
+                        refresh,
                         visited,
                         combined_prefix.as_deref(),
                     )?;
@@ -125,6 +127,8 @@ impl<'a> Resolver<'a> {
                         entry: entry.clone(),
                         origin: entry_origin,
                         policy: policy.clone(),
+                        refresh,
+                        ancestry: visited.clone(),
                     });
                 }
             }
@@ -156,7 +160,7 @@ impl<'a> Resolver<'a> {
     pub fn read_doc(&self, entry: &ResolvedEntry) -> Result<String> {
         match &entry.entry.kind {
             EntryKind::Doc { path, .. } => {
-                let dir = self.cache.ensure(&entry.origin)?;
+                let dir = self.cache.ensure_with(&entry.origin, entry.refresh)?;
                 self.cache.read_file(&dir, path)
             }
             _ => Err(AIexError::Other("not a doc entry".into())),
@@ -166,8 +170,12 @@ impl<'a> Resolver<'a> {
     /// Run a `command` entry against a query.
     pub fn run(&self, entry: &ResolvedEntry, query: &str) -> Result<String> {
         match &entry.entry.kind {
-            EntryKind::Command { argv, success_exit_codes, .. } => {
-                let dir = self.cache.ensure(&entry.origin)?;
+            EntryKind::Command {
+                argv,
+                success_exit_codes,
+                ..
+            } => {
+                let dir = self.cache.ensure_with(&entry.origin, entry.refresh)?;
                 run_command(&entry.policy, argv, query, &dir, success_exit_codes)
             }
             _ => Err(AIexError::Other("not a command entry".into())),
@@ -206,10 +214,7 @@ fn entry_repo(kind: &EntryKind) -> Option<GitRef> {
 }
 
 fn build_view(entry: &Entry, merge_prefix: Option<&str>) -> EntryView {
-    let raw_id = entry
-        .id
-        .clone()
-        .unwrap_or_else(|| slugify(&entry.name));
+    let raw_id = entry.id.clone().unwrap_or_else(|| slugify(&entry.name));
     let id = match merge_prefix {
         Some(p) => format!("{p}{raw_id}"),
         None => raw_id,
@@ -248,14 +253,21 @@ pub fn descend<'a>(
     parent: &LoadedIndex,
     id: &str,
 ) -> Result<LoadedIndex> {
-    let entry = parent.find(id).ok_or_else(|| AIexError::EntryNotFound {
-        id: id.to_string(),
-    })?;
+    let entry = parent
+        .find(id)
+        .ok_or_else(|| AIexError::EntryNotFound { id: id.to_string() })?;
     let path = match &entry.entry.kind {
         EntryKind::Index { path, .. } => path.clone(),
         _ => return Err(AIexError::Other(format!("entry '{id}' is not an index"))),
     };
-    resolver.load_index(&entry.origin, &path, &parent.policy)
+    resolver.load_index_inner(
+        &entry.origin,
+        &path,
+        &entry.policy,
+        entry.refresh,
+        &mut entry.ancestry.clone(),
+        None,
+    )
 }
 
 // keep import even if unused depending on call sites

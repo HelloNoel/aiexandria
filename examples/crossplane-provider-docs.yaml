@@ -18,7 +18,7 @@ description: >
   contribution guides. Sub-provider docs live in git submodules.
 
 command_policy:
-  allow: '^rg( -[A-Za-z]+)*( --[A-Za-z-]+(=[^ ]+)?)* [^;&|`$]+$'
+  allow: '^rg --max-count 20 -- .+ [.]$'
   timeout_secs: 15
 
 entries:
@@ -47,4 +47,4 @@ entries:
     name: Full-text search
     description: Substring search across the whole docs tree via ripgrep
     kind: command
-    argv: ["rg", "--max-count", "20", "{query}", "."]
+    argv: ["rg", "--max-count", "20", "--", "{query}", "."]

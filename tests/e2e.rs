@@ -67,19 +67,19 @@ entries:
     );
     write(&dir.join("docs/deep.md"), "# Deep\n\nDeeper body.\n");
 
-    let repo = Repository::init_opts(
-        dir,
-        git2::RepositoryInitOptions::new().initial_head("main"),
-    )
-    .unwrap();
+    let repo = Repository::init_opts(dir, git2::RepositoryInitOptions::new().initial_head("main"))
+        .unwrap();
     {
         let mut index = repo.index().unwrap();
-        index.add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None).unwrap();
+        index
+            .add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
         index.write().unwrap();
         let tree_oid = index.write_tree().unwrap();
         let tree = repo.find_tree(tree_oid).unwrap();
         let sig = Signature::now("test", "test@example.com").unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
     }
     format!("file://{}", dir.display())
 }
@@ -242,7 +242,10 @@ fn read_file_reads_arbitrary_path_and_rejects_traversal() {
     let body = cache.read_file(&dir, "docs/deep.md").unwrap();
     assert!(body.contains("Deeper body."));
 
-    let err = cache.read_file(&dir, "../../etc/passwd").unwrap_err().to_string();
+    let err = cache
+        .read_file(&dir, "../../etc/passwd")
+        .unwrap_err()
+        .to_string();
     assert!(
         err.contains("escapes repo root") || err.contains("not found"),
         "got: {err}"
@@ -270,7 +273,9 @@ fn concurrent_ensure_serializes() {
         })
         .collect();
     for h in handles {
-        h.join().unwrap().expect("concurrent ensure should not race");
+        h.join()
+            .unwrap()
+            .expect("concurrent ensure should not race");
     }
 }
 
@@ -358,7 +363,8 @@ fn refresh_policy_pulls_new_commits() {
     write(&repo_dir.join("README.md"), "# Test\n\nUpdated body.\n");
     let upstream = Repository::open(&repo_dir).unwrap();
     let mut idx = upstream.index().unwrap();
-    idx.add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None).unwrap();
+    idx.add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
     idx.write().unwrap();
     let tree = upstream.find_tree(idx.write_tree().unwrap()).unwrap();
     let sig = Signature::now("t", "t@t").unwrap();
@@ -393,13 +399,21 @@ fn urlless_submodule_is_skipped_not_fatal() {
     );
     let upstream = Repository::open(&repo_dir).unwrap();
     let mut idx = upstream.index().unwrap();
-    idx.add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None).unwrap();
+    idx.add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
     idx.write().unwrap();
     let tree = upstream.find_tree(idx.write_tree().unwrap()).unwrap();
     let sig = Signature::now("t", "t@t").unwrap();
     let head = upstream.head().unwrap().peel_to_commit().unwrap();
     upstream
-        .commit(Some("HEAD"), &sig, &sig, "add broken submodule", &tree, &[&head])
+        .commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "add broken submodule",
+            &tree,
+            &[&head],
+        )
         .unwrap();
 
     let cache = cache(tmp.path());
@@ -409,6 +423,11 @@ fn urlless_submodule_is_skipped_not_fatal() {
         ..Default::default()
     };
     // Must not error on the URL-less submodule.
-    let dir = cache.ensure(&git_ref).expect("clone should skip url-less submodule");
-    assert!(cache.read_file(&dir, "README.md").unwrap().contains("Readme"));
+    let dir = cache
+        .ensure(&git_ref)
+        .expect("clone should skip url-less submodule");
+    assert!(cache
+        .read_file(&dir, "README.md")
+        .unwrap()
+        .contains("Readme"));
 }

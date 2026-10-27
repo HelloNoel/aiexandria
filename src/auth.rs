@@ -55,15 +55,25 @@ impl AuthConfig {
     ///   1. explicit `token_env` on the GitRef (if provided)
     ///   2. central config entry matching the URL's host
     pub fn resolve(&self, url: &str, override_env: Option<&str>) -> Result<Option<ResolvedToken>> {
-        if let Some(env) = override_env {
-            return Ok(std::env::var(env).ok().map(|t| ResolvedToken {
-                username: "git".into(),
-                token: t,
-            }));
-        }
-        // Local file:// repos don't need auth.
+        // Local repositories never need credentials, even with an inherited override.
         if url.starts_with("file://") {
             return Ok(None);
+        }
+        if let Some(env) = override_env {
+            let token = std::env::var(env).map_err(|_| AIexError::MissingToken {
+                host: host_of(url).unwrap_or_else(|_| url.to_string()),
+                reason: format!("env var {env} not set or not valid Unicode"),
+            })?;
+            if token.is_empty() {
+                return Err(AIexError::MissingToken {
+                    host: host_of(url).unwrap_or_else(|_| url.to_string()),
+                    reason: format!("env var {env} is empty"),
+                });
+            }
+            return Ok(Some(ResolvedToken {
+                username: "git".into(),
+                token,
+            }));
         }
         let host = host_of(url)?;
         let Some(entry) = self.hosts.get(&host) else {
@@ -81,6 +91,12 @@ impl AuthConfig {
             },
             TokenSource::Inline { token } => token.clone(),
         };
+        if token.is_empty() {
+            return Err(AIexError::MissingToken {
+                host,
+                reason: "configured token is empty".into(),
+            });
+        }
         Ok(Some(ResolvedToken {
             username: entry.username.clone().unwrap_or_else(|| "git".into()),
             token,
@@ -118,11 +134,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn file_urls_skip_missing_explicit_credentials() {
+        assert!(AuthConfig::default()
+            .resolve("file:///tmp/docs", Some("AIEX_MISSING_LOCAL_TOKEN_728593"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn parses_ssh_host() {
-        assert_eq!(
-            host_of("git@github.com:foo/bar.git").unwrap(),
-            "github.com"
-        );
+        assert_eq!(host_of("git@github.com:foo/bar.git").unwrap(), "github.com");
     }
 
     #[test]

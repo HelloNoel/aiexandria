@@ -2,7 +2,7 @@ version: 1
 name: AIexandria
 description: >
   AIexandria's own documentation. Covers installation, registry/auth config,
-  refresh policy, command sandbox, and the index YAML schema.
+  refresh policy, command policy, and the index YAML schema.
 
 entries:
   - id: getting-started

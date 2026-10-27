@@ -40,18 +40,18 @@ entries:
     );
     write(&dir.join("README.md"), "smoke readme\n");
 
-    let repo = Repository::init_opts(
-        dir,
-        git2::RepositoryInitOptions::new().initial_head("main"),
-    )
-    .unwrap();
+    let repo = Repository::init_opts(dir, git2::RepositoryInitOptions::new().initial_head("main"))
+        .unwrap();
     let mut index = repo.index().unwrap();
-    index.add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None).unwrap();
+    index
+        .add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
     index.write().unwrap();
     let tree_oid = index.write_tree().unwrap();
     let tree = repo.find_tree(tree_oid).unwrap();
     let sig = Signature::now("t", "t@t").unwrap();
-    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+        .unwrap();
     format!("file://{}", dir.display())
 }
 

@@ -33,7 +33,12 @@ struct Cli {
 
     /// How often to re-fetch a cached repo. Examples: "5m", "1h", "24h", "never".
     /// Per-registry-entry `refresh:` settings override this. Default: never.
-    #[arg(long, env = "AIEXANDRIA_REFRESH", default_value = "never", global = true)]
+    #[arg(
+        long,
+        env = "AIEXANDRIA_REFRESH",
+        default_value = "never",
+        global = true
+    )]
     refresh: String,
 }
 
@@ -80,8 +85,9 @@ fn parse_refresh(s: &str) -> anyhow::Result<RefreshPolicy> {
 fn load_auth(cli: &Cli) -> Result<AuthConfig> {
     let auth_path = cli.auth.clone().or_else(AuthConfig::default_path);
     match auth_path {
-        Some(p) if p.exists() => AuthConfig::load_from(&p)
-            .with_context(|| format!("loading auth from {}", p.display())),
+        Some(p) if p.exists() => {
+            AuthConfig::load_from(&p).with_context(|| format!("loading auth from {}", p.display()))
+        }
         _ => Ok(AuthConfig::default()),
     }
 }
@@ -164,8 +170,7 @@ async fn run_subcommand(cli: &Cli, cmd: &Command) -> Result<()> {
                 .with_context(|| format!("generating index for {}", local_path.display()))?;
             match output {
                 Some(p) => {
-                    std::fs::write(p, &yaml)
-                        .with_context(|| format!("writing {}", p.display()))?;
+                    std::fs::write(p, &yaml).with_context(|| format!("writing {}", p.display()))?;
                     eprintln!("wrote {}", p.display());
                 }
                 None => print!("{yaml}"),

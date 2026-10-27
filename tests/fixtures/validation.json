@@ -1,0 +1,510 @@
+[
+  {
+    "name": "empty entry list",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": []
+    }
+  },
+  {
+    "name": "doc",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md"
+        }
+      ]
+    }
+  },
+  {
+    "name": "command",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "command",
+          "name": "search",
+          "argv": [
+            "rg",
+            "--",
+            "{query}",
+            "docs/"
+          ],
+          "success_exit_codes": [
+            0,
+            1
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty later argument",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "command",
+          "name": "search",
+          "argv": [
+            "echo",
+            ""
+          ],
+          "success_exit_codes": [
+            0,
+            1
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty name",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "",
+      "entries": []
+    }
+  },
+  {
+    "name": "future version",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 2,
+      "name": "docs",
+      "entries": []
+    }
+  },
+  {
+    "name": "unknown field",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [],
+      "typo": 1
+    }
+  },
+  {
+    "name": "null description",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [],
+      "description": null
+    }
+  },
+  {
+    "name": "empty allow",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [],
+      "command_policy": {
+        "allow": ""
+      }
+    }
+  },
+  {
+    "name": "zero timeout",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [],
+      "command_policy": {
+        "timeout_secs": 0
+      }
+    }
+  },
+  {
+    "name": "empty id",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "id": ""
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty path",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": ""
+        }
+      ]
+    }
+  },
+  {
+    "name": "null repo",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty URL",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": ""
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty branch",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/r.git",
+            "branch": ""
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "conflicting refs",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/r.git",
+            "branch": "main",
+            "tag": "v1"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "bad commit",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/r.git",
+            "commit": "abc"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty argv",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "command",
+          "name": "search",
+          "argv": [],
+          "success_exit_codes": [
+            0,
+            1
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty executable",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "command",
+          "name": "search",
+          "argv": [
+            ""
+          ],
+          "success_exit_codes": [
+            0,
+            1
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "negative exit code",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "command",
+          "name": "search",
+          "argv": [
+            "rg",
+            "--",
+            "{query}",
+            "docs/"
+          ],
+          "success_exit_codes": [
+            -1
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "large exit code",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "command",
+          "name": "search",
+          "argv": [
+            "rg",
+            "--",
+            "{query}",
+            "docs/"
+          ],
+          "success_exit_codes": [
+            256
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "merge name",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "merge",
+          "name": "bad",
+          "path": "other.yaml"
+        }
+      ]
+    }
+  },
+  {
+    "name": "commit 7",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/r.git",
+            "commit": "abcdef0"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "commit 40",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/r.git",
+            "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "registry",
+    "valid": true,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs-main_1": {
+          "repo": {
+            "url": "https://example.com/r.git",
+            "branch": "main"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "empty registry",
+    "valid": false,
+    "kind": "registry",
+    "value": {
+      "indexes": {}
+    }
+  },
+  {
+    "name": "bad registry name",
+    "valid": false,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "_bad": {
+          "repo": {
+            "url": "https://example.com/r.git",
+            "branch": "main"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "empty registry path",
+    "valid": false,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/r.git",
+            "branch": "main"
+          },
+          "path": ""
+        }
+      }
+    }
+  },
+  {
+    "name": "null refresh",
+    "valid": false,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/r.git",
+            "branch": "main"
+          },
+          "path": "pinakes.yaml",
+          "refresh": null
+        }
+      }
+    }
+  },
+  {
+    "name": "compound refresh",
+    "valid": true,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/r.git",
+            "branch": "main"
+          },
+          "path": "pinakes.yaml",
+          "refresh": "1h 30m"
+        }
+      }
+    }
+  }
+]

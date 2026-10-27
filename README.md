@@ -19,7 +19,7 @@ An **index** is a YAML file with `entries`, each a `kind`:
 - `index` — a child index, resolved on demand
 - `merge` — pulls another index's entries inline so multiple contributors
   can compose an index without each maintaining a complete one
-- `command` — a sandboxed shell command (e.g. `rg "{query}" docs/`) for
+- `command` — a policy-controlled command (e.g. `rg -- "{query}" docs/`) for
   custom retrieval; `{query}` is substituted from the LLM's input
 
 A `command_policy.allow` regex on an index gates what `command` entries
@@ -34,6 +34,12 @@ content from multiple repos via submodules just works.
 Auth tokens may be provided per-entry (`token_env`) or centrally
 (`~/.config/aiexandria/auth.yaml` keyed by host); for submodule remotes the
 central config is used automatically.
+
+Command policies restrict which argument strings may run; they are not an OS
+sandbox. Commands inherit your environment and filesystem/network permissions.
+Register command-bearing indexes only when you trust their authors and future
+updates, or run AIexandria inside an OS sandbox with the access you intend to grant.
+Queries must be separated from executable options (for ripgrep, use `--`).
 
 ## Generating an index
 
@@ -104,7 +110,7 @@ the configured interval has elapsed. There's no background scheduler.
 - [src/resolver.rs](src/resolver.rs) — recursive walk + merge flattening
 - [src/cache.rs](src/cache.rs) — git2 shallow-clone cache + submodule init
 - [src/auth.rs](src/auth.rs) — central + per-entry token resolution
-- [src/command.rs](src/command.rs) — sandboxed `command` entry execution
+- [src/command.rs](src/command.rs) — policy-controlled `command` entry execution
 - [src/generate.rs](src/generate.rs) — `aiexandria generate` index generator
 - [src/registry.rs](src/registry.rs) — top-level registry config
 - [src/server.rs](src/server.rs) — MCP server (rmcp)

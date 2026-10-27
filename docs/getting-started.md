@@ -92,7 +92,7 @@ description: "Internal docs for my-project"
 
 # Allow `command` entries to run ripgrep, scoped to docs/.
 command_policy:
-  allow: '^rg( -[A-Za-z]+)* [^;&|`$]+ docs/'
+  allow: '^rg --max-count 20 -- .+ docs/$'
   timeout_secs: 10
 
 entries:
@@ -112,7 +112,7 @@ entries:
     name: Full-text search
     description: "Substring search over docs/. Pass a query."
     kind: command
-    argv: ["rg", "--max-count", "20", "{query}", "docs/"]
+    argv: ["rg", "--max-count", "20", "--", "{query}", "docs/"]
 ```
 
 Commit and push. AIexandria will clone this repo on demand the first time
@@ -129,7 +129,7 @@ The four entry kinds you can use:
 | `doc` | A leaf text file Claude can read |
 | `index` | A child `pinakes.yaml` (same repo or a different one) |
 | `merge` | Inline another index's entries here — for shared/composed indexes |
-| `command` | A sandboxed shell command (RAG, ripgrep, ...). `{query}` is replaced with Claude's input |
+| `command` | A policy-controlled command (RAG, ripgrep, ...). `{query}` is replaced with Claude's input |
 
 `command` entries are gated by the `command_policy.allow` regex on the
 nearest enclosing index. The chain of regexes from root to leaf is

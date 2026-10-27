@@ -1,4 +1,4 @@
-//! Sandboxed execution of `command` entries.
+//! Policy-controlled execution of `command` entries.
 //!
 //! A `CommandPolicyChain` is the *intersection* of all `command_policy` blocks
 //! seen on the way down the index hierarchy. A child index can only narrow
@@ -90,83 +90,138 @@ pub fn run_command(
     if argv.is_empty() {
         return Err(AIexError::Other("empty argv".into()));
     }
-    let expanded: Vec<String> = argv
-        .iter()
-        .map(|a| a.replace("{query}", query))
-        .collect();
-    let command_line = shell_words::join(&expanded);
+    let expanded: Vec<String> = argv.iter().map(|a| a.replace("{query}", query)).collect();
+    let command_line = expanded.join(" ");
     policy.check(&command_line)?;
-
-    let mut child = std::process::Command::new(&expanded[0])
-        .args(&expanded[1..])
-        .current_dir(repo_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-
-    // Drain stdout/stderr on separate threads so a chatty child can't fill
-    // the OS pipe buffer and deadlock (it blocks writing, we block waiting).
-    let mut stdout_pipe = child.stdout.take().expect("stdout piped");
-    let mut stderr_pipe = child.stderr.take().expect("stderr piped");
-    let stdout_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut stdout_pipe, &mut buf);
-        buf
+    let mut command = process_wrap::std::CommandWrap::with_new(&expanded[0], |cmd| {
+        cmd.args(&expanded[1..])
+            .current_dir(repo_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
     });
-    let stderr_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut stderr_pipe, &mut buf);
-        buf
+    #[cfg(unix)]
+    command.wrap(process_wrap::std::ProcessGroup::leader());
+    #[cfg(windows)]
+    command.wrap(process_wrap::std::JobObject);
+    let mut child = command.spawn()?;
+    let stdout_pipe = child.stdout().take().expect("stdout piped");
+    let stderr_pipe = child.stderr().take().expect("stderr piped");
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::sync_channel(1);
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = stdout_tx.send(read_bounded(stdout_pipe));
     });
-
-    let timeout = policy.timeout;
-    let start = std::time::Instant::now();
-    let status = loop {
-        match child.try_wait()? {
-            Some(status) => break status,
-            None => {
-                if start.elapsed() > timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(AIexError::Other(format!(
-                        "command timed out after {:?}: {command_line}",
-                        timeout
-                    )));
-                }
-                std::thread::sleep(Duration::from_millis(50));
+    std::thread::spawn(move || {
+        let _ = stderr_tx.send(read_bounded(stderr_pipe));
+    });
+    let started = std::time::Instant::now();
+    let mut status = None;
+    let mut stdout = None;
+    let mut stderr = None;
+    loop {
+        match child.try_wait() {
+            Ok(Some(exit)) => status = Some(exit),
+            Ok(None) => {}
+            Err(err) => {
+                let _ = child.start_kill();
+                let _ = child.wait();
+                return Err(err.into());
             }
         }
-    };
-
-    // Threads finish once the pipes hit EOF (guaranteed after the child exits).
-    let stdout_bytes = stdout_reader.join().unwrap_or_default();
-    let stderr_bytes = stderr_reader.join().unwrap_or_default();
-    let mut out = String::from_utf8_lossy(&stdout_bytes).into_owned();
-    const MAX: usize = 256 * 1024;
-    if out.len() > MAX {
-        out.truncate(MAX);
-        out.push_str("\n...[truncated]");
-    }
-    if !status.success() {
-        let exit_code = status.code();
-        let allowed = match exit_code {
-            Some(c) if success_exit_codes.contains(&c) => true,
-            _ => false,
-        };
-        if !allowed {
-            let stderr = String::from_utf8_lossy(&stderr_bytes);
+        if stdout.is_none() {
+            stdout = stdout_rx.try_recv().ok();
+        }
+        if stderr.is_none() {
+            stderr = stderr_rx.try_recv().ok();
+        }
+        if let (Some(status), true, true) = (status, stdout.is_some(), stderr.is_some()) {
+            let stdout = stdout.take().unwrap();
+            let stderr = stderr.take().unwrap();
+            // Commands must not leave background workers running after returning.
+            let _ = child.start_kill();
+            let stdout = stdout?;
+            let stderr = stderr?;
+            if !status.success()
+                && !status
+                    .code()
+                    .is_some_and(|code| success_exit_codes.contains(&code))
+            {
+                return Err(AIexError::Other(format!(
+                    "command failed ({status}): {}",
+                    render_output(stderr)
+                )));
+            }
+            return Ok(render_output(stdout));
+        }
+        if started.elapsed() >= policy.timeout {
+            let _ = child.start_kill();
+            let _ = child.wait();
+            // Never wait indefinitely for a detached descendant holding a pipe.
             return Err(AIexError::Other(format!(
-                "command failed ({status}): {stderr}"
+                "command timed out after {:?}: {command_line}",
+                policy.timeout
             )));
         }
+        std::thread::sleep(Duration::from_millis(10));
     }
-    Ok(out)
+}
+
+const MAX_OUTPUT_BYTES: usize = 256 * 1024;
+struct BoundedOutput {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+fn read_bounded(mut stream: impl std::io::Read) -> std::io::Result<BoundedOutput> {
+    let mut output = BoundedOutput {
+        bytes: Vec::new(),
+        truncated: false,
+    };
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = match stream.read(&mut buffer) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            other => other?,
+        };
+        if count == 0 {
+            return Ok(output);
+        }
+        let retained = count.min(MAX_OUTPUT_BYTES - output.bytes.len());
+        output.bytes.extend_from_slice(&buffer[..retained]);
+        output.truncated |= retained < count;
+    }
+}
+fn render_output(output: BoundedOutput) -> String {
+    let mut text = String::from_utf8_lossy(&output.bytes).into_owned();
+    let truncated = output.truncated || text.len() > MAX_OUTPUT_BYTES;
+    if text.len() > MAX_OUTPUT_BYTES {
+        let mut boundary = MAX_OUTPUT_BYTES;
+        while !text.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        text.truncate(boundary);
+    }
+    if truncated {
+        text.push_str("\n...[truncated]");
+    }
+    text
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_readers_drain_but_retain_only_the_limit() {
+        use std::io::Read;
+        let output =
+            read_bounded(std::io::repeat(255).take((MAX_OUTPUT_BYTES * 8) as u64)).unwrap();
+        assert_eq!(output.bytes.len(), MAX_OUTPUT_BYTES);
+        assert!(output.truncated);
+        let text = render_output(output);
+        assert!(text.len() <= MAX_OUTPUT_BYTES + "\n...[truncated]".len());
+        assert!(text.ends_with("...[truncated]"));
+    }
 
     #[test]
     fn deny_when_no_policy() {
