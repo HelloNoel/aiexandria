@@ -13,13 +13,17 @@ use rmcp::{transport::stdio, ServiceExt};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
-#[command(name = "aiexandria", about = "MCP server for git-hosted documentation")]
+#[command(
+    name = "aiexandria",
+    version,
+    about = "MCP server for git-hosted documentation"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
     /// Path to the registry config (defines which top-level indexes are exposed).
-    /// Required when running the MCP server (no subcommand).
+    /// Uses the public starter collection when no registry is configured.
     #[arg(long, env = "AIEXANDRIA_REGISTRY", global = true)]
     registry: Option<PathBuf>,
 
@@ -106,16 +110,11 @@ async fn main() -> Result<()> {
         return run_subcommand(&cli, cmd).await;
     }
 
-    let registry_path = cli
-        .registry
-        .clone()
-        .or_else(RegistryConfig::default_path)
-        .context(
-            "no registry config found — pass --registry, set AIEXANDRIA_REGISTRY, \
-             or create ~/.config/aiexandria/registry.yaml",
-        )?;
-    let registry = RegistryConfig::load_from(&registry_path)
-        .with_context(|| format!("loading registry from {}", registry_path.display()))?;
+    let registry = RegistryConfig::select(
+        cli.registry.as_deref(),
+        RegistryConfig::default_path().as_deref(),
+    )
+    .context("loading documentation registry")?;
 
     let auth = load_auth(&cli)?;
     let refresh = parse_refresh(&cli.refresh)?;

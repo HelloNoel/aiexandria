@@ -1,22 +1,17 @@
-# Example AIexandria registry. Point AIexandria at this with --registry.
+# Select this file with --registry.
 indexes:
-  rust-book:
-    description: "The Rust Programming Language book"
+  public-docs:
+    description: Public programming and development documentation
     repo:
-      url: https://github.com/rust-lang/book.git
-      branch: main
+      url: https://github.com/HelloNoel/aiexandria-indexes.git
+      branch: v1
+      submodules: false
     path: pinakes.yaml
-    # Re-fetch this repo at most once an hour. Accepts humantime ("5m", "24h",
-    # "1d") or "never". If unset, the --refresh CLI default applies.
-    refresh: 1h
-
-  internal-platform:
-    description: "Internal platform docs (private)"
+    refresh: 24h
+  aiexandria:
     repo:
-      url: git@github.example.com:platform/docs.git
-      branch: main
-      # token will be looked up via auth config (see auth.example.yaml),
-      # or override here:
-      token_env: PLATFORM_DOCS_TOKEN
+      url: https://github.com/HelloNoel/aiexandria.git
+      tag: v0.3.0
+      submodules: false
     path: docs/pinakes.yaml
-    refresh: 15m
+    refresh: never

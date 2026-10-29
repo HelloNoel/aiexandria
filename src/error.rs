@@ -46,6 +46,17 @@ pub enum AIexError {
     #[error("repository is still being fetched (cold start); retry in a few seconds: {url}")]
     Warming { url: String },
 
+    #[error(
+        "search refresh wait limit reached; repository work may still be pending; retry shortly"
+    )]
+    RefreshPending,
+
+    #[error("repository refresh failed: {0}")]
+    RefreshFailed(String),
+
+    #[error("index traversal limit reached: {0}")]
+    TraversalLimit(&'static str),
+
     #[error("{0}")]
     Other(String),
 }

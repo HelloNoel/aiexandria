@@ -3,16 +3,17 @@ mod tests {
     use aiexandria::{
         auth::AuthConfig,
         cache::RepoCache,
-        command::{run_command, CommandPolicyChain},
+        command::CommandPolicyChain,
         generate::{generate_index, GenerateOptions},
-        index::{CommandPolicy, GitRef},
+        index::GitRef,
         resolver::{descend, Resolver},
     };
+    #[cfg(unix)]
+    use aiexandria::{command::run_command, index::CommandPolicy};
     use git2::{Repository, Signature};
-    use std::{
-        path::Path,
-        time::{Duration, Instant},
-    };
+    #[cfg(unix)]
+    use std::time::Instant;
+    use std::{path::Path, time::Duration};
     use tempfile::TempDir;
     fn write(root: &Path, path: &str, body: &str) {
         let p = root.join(path);
@@ -41,20 +42,22 @@ mod tests {
         (
             repo,
             GitRef {
-                url: format!("file://{}", path.display()),
+                url: url::Url::from_directory_path(&path).unwrap().into(),
                 submodules: false,
                 ..Default::default()
             },
         )
     }
-    fn policy(pattern: &str) -> CommandPolicyChain {
+    #[cfg(unix)]
+    fn policy(pattern: &str, timeout_secs: u64) -> CommandPolicyChain {
         CommandPolicyChain::default()
             .extend(Some(&CommandPolicy {
                 allow: Some(pattern.into()),
-                timeout_secs: Some(1),
+                timeout_secs: Some(timeout_secs),
             }))
             .unwrap()
     }
+    #[cfg(unix)]
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
     }
@@ -145,7 +148,7 @@ mod tests {
     #[test]
     fn argv_join_matches_spec() {
         let out = run_command(
-            &policy("^echo hello world$"),
+            &policy("^echo hello world$", 10),
             &args(&["echo", "{query}"]),
             "hello world",
             Path::new("/tmp"),
@@ -158,7 +161,7 @@ mod tests {
     fn unicode_output_is_truncated_safely() {
         let result = std::panic::catch_unwind(|| {
             run_command(
-                &policy("^/usr/bin/python3 "),
+                &policy("^/usr/bin/python3 ", 10),
                 &args(&["/usr/bin/python3", "-c", "print('€'*90000)"]),
                 "",
                 Path::new("/tmp"),
@@ -172,7 +175,7 @@ mod tests {
     fn pipe_descendant_obeys_timeout() {
         let start = Instant::now();
         let result = run_command(
-            &policy("^/usr/bin/python3 "),
+            &policy("^/usr/bin/python3 ", 1),
             &args(&[
                 "/usr/bin/python3",
                 "-c",
@@ -385,7 +388,7 @@ mod tests {
     #[test]
     fn command_stderr_is_bounded() {
         let error = run_command(
-            &policy("^/usr/bin/python3 "),
+            &policy("^/usr/bin/python3 ", 10),
             &args(&[
                 "/usr/bin/python3",
                 "-c",
@@ -397,7 +400,7 @@ mod tests {
         )
         .unwrap_err();
         let message = error.to_string();
-        assert!(message.ends_with("...[truncated]"));
+        assert!(message.ends_with("...[truncated]"), "{message}");
         assert!(message.len() < 263000);
     }
     #[cfg(unix)]

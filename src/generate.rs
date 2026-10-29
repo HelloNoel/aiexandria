@@ -201,7 +201,7 @@ fn build_index(repo_root: &Path, dir: &Path, opts: &GenerateOptions) -> Result<G
         entries.push(GeneratedEntry {
             id: Some("search".into()),
             name: "Full-text search".into(),
-            description: Some("Substring search across all docs via ripgrep.".into()),
+            description: Some("Search this directory recursively with ripgrep. Query is a Rust regular expression; words and spaces are literal, | means OR. No Boolean AND/OR operators.".into()),
             kind: "command".into(),
             path: String::new(),
             repo: None,

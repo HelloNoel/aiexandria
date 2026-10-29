@@ -1,6 +1,7 @@
 //! Resolves a hierarchical index: walking from a root index into sub-indexes,
 //! merge entries, and on-demand into the docs/commands they reference.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -33,13 +34,80 @@ pub struct ResolvedEntry {
     ancestry: HashSet<PathBuf>,
 }
 
+pub(crate) struct TraversalBudget {
+    max_depth: usize,
+    remaining: Cell<usize>,
+    stale: Cell<bool>,
+}
+
+impl TraversalBudget {
+    pub fn new(max_depth: usize, max_nodes: usize) -> Self {
+        Self {
+            max_depth,
+            remaining: Cell::new(max_nodes),
+            stale: Cell::new(false),
+        }
+    }
+    fn visit(&self, depth: usize) -> Result<()> {
+        if depth >= self.max_depth {
+            return Err(AIexError::TraversalLimit("depth"));
+        }
+        let remaining = self.remaining.get();
+        if remaining == 0 {
+            return Err(AIexError::TraversalLimit("index loads"));
+        }
+        self.remaining.set(remaining - 1);
+        Ok(())
+    }
+
+    pub(crate) fn is_stale(&self) -> bool {
+        self.stale.get()
+    }
+}
+
 pub struct Resolver<'a> {
     pub cache: &'a RepoCache,
+    budget: Option<&'a TraversalBudget>,
+    fresh_deadline: Option<std::time::Instant>,
 }
 
 impl<'a> Resolver<'a> {
+    pub(crate) fn with_budget(cache: &'a RepoCache, budget: &'a TraversalBudget) -> Self {
+        Self {
+            cache,
+            budget: Some(budget),
+            fresh_deadline: None,
+        }
+    }
+
     pub fn new(cache: &'a RepoCache) -> Self {
-        Self { cache }
+        Self {
+            cache,
+            budget: None,
+            fresh_deadline: None,
+        }
+    }
+
+    pub(crate) fn with_deadline(cache: &'a RepoCache, deadline: std::time::Instant) -> Self {
+        Self {
+            cache,
+            budget: None,
+            fresh_deadline: Some(deadline),
+        }
+    }
+
+    pub(crate) fn ensure(
+        &self,
+        origin: &GitRef,
+        refresh: RefreshPolicy,
+    ) -> Result<(PathBuf, bool)> {
+        match self.fresh_deadline {
+            Some(deadline) => self
+                .cache
+                .ensure_fresh_until(origin, refresh, deadline)
+                .map(|dir| (dir, false)),
+            None => self.cache.ensure_with_status(origin, refresh),
+        }
     }
 
     /// Load an index file from a repo + path, with merge entries flattened in-place.
@@ -84,7 +152,13 @@ impl<'a> Resolver<'a> {
         visited: &mut HashSet<PathBuf>,
         merge_prefix: Option<&str>,
     ) -> Result<LoadedIndex> {
-        let repo_dir = self.cache.ensure_with(origin, refresh)?;
+        if let Some(budget) = self.budget {
+            budget.visit(visited.len())?;
+        }
+        let (repo_dir, stale) = self.ensure(origin, refresh)?;
+        if let Some(budget) = self.budget {
+            budget.stale.set(budget.stale.get() || stale);
+        }
         let key = repo_dir.join(rel_path).canonicalize()?;
         if !visited.insert(key.clone()) {
             return Err(AIexError::MergeCycle {
@@ -160,7 +234,7 @@ impl<'a> Resolver<'a> {
     pub fn read_doc(&self, entry: &ResolvedEntry) -> Result<String> {
         match &entry.entry.kind {
             EntryKind::Doc { path, .. } => {
-                let dir = self.cache.ensure_with(&entry.origin, entry.refresh)?;
+                let (dir, _) = self.ensure(&entry.origin, entry.refresh)?;
                 self.cache.read_file(&dir, path)
             }
             _ => Err(AIexError::Other("not a doc entry".into())),
@@ -175,7 +249,7 @@ impl<'a> Resolver<'a> {
                 success_exit_codes,
                 ..
             } => {
-                let dir = self.cache.ensure_with(&entry.origin, entry.refresh)?;
+                let (dir, _) = self.ensure(&entry.origin, entry.refresh)?;
                 run_command(&entry.policy, argv, query, &dir, success_exit_codes)
             }
             _ => Err(AIexError::Other("not a command entry".into())),

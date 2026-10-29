@@ -5,7 +5,9 @@
 
 pub mod auth;
 pub mod cache;
+mod catalog;
 pub mod command;
+pub mod discovery;
 pub mod error;
 pub mod generate;
 pub mod index;

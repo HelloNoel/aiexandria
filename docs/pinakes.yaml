@@ -1,26 +1,39 @@
 version: 1
 name: AIexandria
-description: >
-  AIexandria's own documentation. Covers installation, registry/auth config,
-  refresh policy, command policy, and the index YAML schema.
-
+description: AIexandria v0.3.0 installation, public defaults, custom registries, source discovery, and troubleshooting.
 entries:
   - id: getting-started
-    name: Getting Started
-    description: >
-      How to install AIexandria, configure a registry, wire it into Claude
-      Code, and write or generate a pinakes.yaml.
+    name: Getting started
+    description: Install, connect an MCP client, and read the public defaults.
     kind: doc
     path: docs/getting-started.md
-
-  - id: readme
-    name: README
-    description: Project overview and feature summary
+  - id: installation
+    name: Installation and MCP clients
+    description: Download binaries; macOS, Linux, Windows, Codex, and Claude Code setup.
     kind: doc
-    path: README.md
-
-  - id: license
-    name: License
-    description: Apache-2.0 license text
+    path: docs/installation.md
+  - id: adding-documentation
+    name: Add documentation
+    description: Custom registries, private docs, and cross-repository collections.
     kind: doc
-    path: LICENSE
+    path: docs/adding-documentation.md
+  - id: source-discovery
+    name: Find information
+    description: Discover sources, choose a version, search, read excerpts, and handle refresh deadlines.
+    kind: doc
+    path: docs/source-discovery.md
+  - id: writing-indexes
+    name: Write useful indexes
+    description: Generate Pinakes indexes, descriptions, composition, and optional search commands.
+    kind: doc
+    path: docs/writing-indexes.md
+  - id: configuration
+    name: Configuration and troubleshooting
+    description: Registry precedence, authentication, cache paths, refresh, and SHA-256 limitations.
+    kind: doc
+    path: docs/configuration.md
+  - id: reference
+    name: Reference
+    description: CLI options, environment variables, and seven MCP tools.
+    kind: doc
+    path: docs/reference.md

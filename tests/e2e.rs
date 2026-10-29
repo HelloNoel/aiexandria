@@ -30,7 +30,7 @@ fn make_docs_repo(dir: &Path) -> String {
 version: 1
 name: testproj
 command_policy:
-  allow: '^echo '
+  allow: '^git -c aiexandria.query='
   timeout_secs: 5
 entries:
   - id: readme
@@ -45,7 +45,7 @@ entries:
   - id: greet
     name: Greeting
     kind: command
-    argv: ["echo", "hello {query}"]
+    argv: ["git", "-c", "aiexandria.query=hello {query}", "config", "--get", "aiexandria.query"]
   - id: badcat
     name: Forbidden
     kind: command
@@ -81,7 +81,7 @@ entries:
         repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
             .unwrap();
     }
-    format!("file://{}", dir.display())
+    url::Url::from_directory_path(dir).unwrap().into()
 }
 
 fn cache(tmp: &Path) -> RepoCache {
@@ -287,7 +287,9 @@ fn cold_clone_of_bogus_repo_surfaces_error_not_warming_forever() {
     let tmp = TempDir::new().unwrap();
     let cache = cache(tmp.path());
     let git_ref = GitRef {
-        url: format!("file://{}/does-not-exist", tmp.path().display()),
+        url: url::Url::from_directory_path(tmp.path().join("does-not-exist"))
+            .unwrap()
+            .into(),
         branch: Some("main".into()),
         ..Default::default()
     };

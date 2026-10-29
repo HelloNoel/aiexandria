@@ -5,4 +5,5 @@
 /.serena
 /.claude/
 /.playwright-mcp/
+/.local/
 .DS_Store

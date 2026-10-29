@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 — 2026-10-29
+
+- Add global metadata discovery with bounded results and explicit coverage status.
+- Bound search preparation with a refresh deadline and retryable pending status.
+- Provide a 20-topic public starter collection and release-specific help when no registry is configured.
+- Preserve explicit and existing registry precedence; report invalid configurations.
+- Rewrite user guides and move CI, releases, and Pages to GitHub.
+- Preserve and re-sign converted SHA-1 history for GitHub compatibility.
+
+Existing custom registries are unchanged. SHA-256 repositories remain unsupported.
+
 ## 0.2.0 — 2026-10-27
 
 ### Added

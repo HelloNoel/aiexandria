@@ -1,122 +1,22 @@
 # AIexandria
 
-An MCP server that gives LLMs hierarchical, sandboxed access to documentation
-hosted in git repositories.
+AIexandria connects AI assistants to documentation in Git repositories through MCP. It finds relevant sources, searches selected documents, and reads the original text with file and line references.
 
-## Why
+**[Get started](https://hellonoel.github.io/aiexandria/getting-started.html)** · [Download v0.3.0](https://github.com/HelloNoel/aiexandria/releases/tag/v0.3.0) · [User guide](docs/introduction.md)
 
-LLMs are bad at picking the right docs to consult. AIexandria lets a docs author
-publish a YAML index alongside their docs in git — flat lists, nested
-sub-indexes, merges of indexes from teammates, and even custom retrieval
-commands (RAG, ripgrep, ...). The LLM walks the tree via a handful of MCP
-tools and only fetches the leaves it actually needs.
+Install the binary and connect your MCP client. With no registry configured, AIexandria provides a curated [public collection](https://github.com/HelloNoel/aiexandria-indexes) covering 20 programming and infrastructure topics, plus help for your installed release. No account, API token, ripgrep, or embedding service is needed for that setup.
 
-## Concepts
+For your own documentation, register a Pinakes index alongside your docs or maintain one in a separate repository. Sources can span public and private repositories, branches, tags, and pinned commits. Different sources can provide their own search commands.
 
-An **index** is a YAML file with `entries`, each a `kind`:
+- **Find sources:** global metadata discovery returns a small ranked selection, including nested indexes.
+- **Search and read:** search the selected source and retrieve relevant line ranges as evidence.
+- **Refresh lazily:** acquire repositories on demand and refresh according to your settings.
+- **Compose collections:** combine team indexes while preserving repository references and command policies.
 
-- `doc` — a leaf text file
-- `index` — a child index, resolved on demand
-- `merge` — pulls another index's entries inline so multiple contributors
-  can compose an index without each maintaining a complete one
-- `command` — a policy-controlled command (e.g. `rg -- "{query}" docs/`) for
-  custom retrieval; `{query}` is substituted from the LLM's input
+Discovery searches metadata, not every document. The starter collection includes selected pages, not complete upstream manuals. First use of a source can take time while its repository is cloned.
 
-A `command_policy.allow` regex on an index gates what `command` entries
-inside it may execute. The chain of allow-regexes from root to leaf is
-*intersected* — children may narrow but never widen.
+See [adding documentation](docs/adding-documentation.md), [configuration](docs/configuration.md), and [writing indexes](docs/writing-indexes.md). Referenced repositories are read-access boundaries; listed documents curate navigation rather than restricting individual files. Custom commands run with the server's permissions and require trusted authors or your own OS isolation.
 
-External indexes are addressed via a `repo:` block (url + branch/tag/commit).
-Submodules are followed by default — when AIexandria clones or refreshes a
-repo it recursively initializes git submodules, so a docs site that composes
-content from multiple repos via submodules just works.
+AIexandria implements [Pinakes](https://github.com/HelloNoel/pinakes). See [CONTRIBUTING.md](CONTRIBUTING.md) for development. Native SHA-256 repository support remains planned.
 
-Auth tokens may be provided per-entry (`token_env`) or centrally
-(`~/.config/aiexandria/auth.yaml` keyed by host); for submodule remotes the
-central config is used automatically.
-
-Command policies restrict which argument strings may run; they are not an OS
-sandbox. Commands inherit your environment and filesystem/network permissions.
-Register command-bearing indexes only when you trust their authors and future
-updates, or run AIexandria inside an OS sandbox with the access you intend to grant.
-Queries must be separated from executable options (for ripgrep, use `--`).
-
-## Generating an index
-
-If you don't want to write `pinakes.yaml` by hand, point the generator at
-a checked-out repo or a git URL:
-
-```sh
-aiexandria generate --repo https://github.com/your/docs-repo --output pinakes.yaml
-```
-
-It walks the tree, treats markdown-ish files as `doc` entries and
-subdirectories as `index` entries, turns submodule paths into `index`
-entries that point at the submodule's *own* repo, and (with the default
-`--no-nested` off) writes nested `pinakes.yaml` files into each
-subdirectory. Treat the output as a starting point — add `description:`
-fields to help the LLM pick, and drop entries that do not help navigation.
-Referencing a repo authorizes repo-root-sandboxed reads from that checkout;
-`doc` entries curate the navigation tree rather than form a file allow-list.
-
-See [examples/crossplane-provider-docs.yaml](examples/crossplane-provider-docs.yaml)
-for a real-world example produced this way.
-
-## Running
-
-See the [getting-started guide](https://hellonoel.codeberg.page/AIexandria/getting-started.html)
-(or the [source](docs/getting-started.md)) for an end-to-end walkthrough that
-installs AIexandria, publishes an index, and wires it into Claude Code as an
-MCP server.
-
-Quick version:
-
-```sh
-cargo install --path .
-aiexandria \
-    --registry ~/.config/aiexandria/registry.yaml \
-    --refresh 1h
-```
-
-## Cache & refresh
-
-Repos are cloned lazily into `~/.cache/aiexandria/repos/<sha8(url)>/<ref>/` the
-first time a tool call touches them. They're refreshed *lazily* too: on each
-request we look at the sentinel mtime in the checkout and only `git fetch` if
-the configured interval has elapsed. There's no background scheduler.
-
-- Global default via `--refresh` / `AIEXANDRIA_REFRESH` (humantime, e.g. `5m`,
-  `1h`, `24h`, or `never` — the default).
-- Per-entry override via `refresh:` in the registry YAML (see
-  [examples/registry.example.yaml](examples/registry.example.yaml)).
-- Pinned `commit:` refs are treated as immutable and never refreshed.
-
-## MCP tools
-
-- `list_indexes` — enumerate top-level indexes
-- `list_docs` — list entries at a given path inside an index
-- `read_doc` — fetch a `doc` entry's contents
-- `read_file` — fetch any file from an entry's repo by path (e.g. to follow
-  up on a `search_docs` hit); sandboxed to the repo root
-- `read_url` — fetch an indexed repository file directly from a GitHub,
-  Codeberg, Forgejo, or Gitea URL
-- `search_docs` — substring search over names/descriptions (pass `deep: true`
-  to also grep doc contents), or run a `command` entry with a query
-
-## Layout
-
-- [src/lib.rs](src/lib.rs) — public crate entrypoint
-- [src/index.rs](src/index.rs) — YAML index schema
-- [src/resolver.rs](src/resolver.rs) — recursive walk + merge flattening
-- [src/cache.rs](src/cache.rs) — git2 shallow-clone cache + submodule init
-- [src/auth.rs](src/auth.rs) — central + per-entry token resolution
-- [src/command.rs](src/command.rs) — policy-controlled `command` entry execution
-- [src/generate.rs](src/generate.rs) — `aiexandria generate` index generator
-- [src/registry.rs](src/registry.rs) — top-level registry config
-- [src/server.rs](src/server.rs) — MCP server (rmcp)
-- [src/main.rs](src/main.rs) — binary entrypoint (server + generate subcommand)
-- [examples/](examples/) — sample registry, auth, and index files
-
-## License
-
-Apache-2.0. See [LICENSE](LICENSE).
+Licensed under [Apache-2.0](LICENSE).

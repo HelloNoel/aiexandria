@@ -80,6 +80,61 @@ impl<'de> Deserialize<'de> for RefreshSetting {
 }
 
 impl RegistryConfig {
+    /// Public defaults do not augment or replace an explicitly configured registry.
+    pub fn select(explicit: Option<&Path>, default_path: Option<&Path>) -> Result<Self> {
+        if let Some(path) = explicit {
+            return Self::load_from(path);
+        }
+        if let Some(path) = default_path {
+            match std::fs::symlink_metadata(path) {
+                Ok(_) => return Self::load_from(path),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(Self::builtin())
+    }
+
+    /// Version-compatible public catalog and help for this exact server release.
+    pub fn builtin() -> Self {
+        Self {
+            indexes: BTreeMap::from([
+                (
+                    "public-docs".into(),
+                    RegistryEntry {
+                        description: Some(
+                            "Curated public programming and infrastructure documentation".into(),
+                        ),
+                        repo: GitRef {
+                            url: "https://github.com/HelloNoel/aiexandria-indexes.git".into(),
+                            branch: Some("v1".into()),
+                            submodules: false,
+                            ..Default::default()
+                        },
+                        path: "pinakes.yaml".into(),
+                        refresh: Some(RefreshSetting::Every(Duration::from_secs(24 * 60 * 60))),
+                    },
+                ),
+                (
+                    "aiexandria".into(),
+                    RegistryEntry {
+                        description: Some(
+                            "AIexandria installation, configuration, and usage".into(),
+                        ),
+                        repo: GitRef {
+                            url: "https://github.com/HelloNoel/aiexandria.git".into(),
+                            tag: Some(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                            submodules: false,
+                            ..Default::default()
+                        },
+                        path: "docs/pinakes.yaml".into(),
+                        refresh: Some(RefreshSetting::Never),
+                    },
+                ),
+            ]),
+        }
+    }
+
     /// Default path: `$XDG_CONFIG_HOME/aiexandria/registry.yaml` if set,
     /// else `~/.config/aiexandria/registry.yaml`.
     pub fn default_path() -> Option<std::path::PathBuf> {
@@ -170,6 +225,41 @@ mod tests {
         let path = dir.path().join("registry.yaml");
         std::fs::write(&path, body).unwrap();
         RegistryConfig::load_from(&path)
+    }
+
+    #[test]
+    fn defaults_only_apply_when_no_configuration_exists() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("missing.yaml");
+        let defaults = RegistryConfig::select(None, Some(&missing)).unwrap();
+        assert_eq!(defaults.indexes.len(), 2);
+        assert_eq!(
+            defaults.indexes["public-docs"].repo.branch.as_deref(),
+            Some("v1")
+        );
+        assert_eq!(
+            defaults.indexes["aiexandria"].repo.tag,
+            Some(format!("v{}", env!("CARGO_PKG_VERSION")))
+        );
+        assert!(RegistryConfig::select(Some(&missing), None).is_err());
+        assert!(RegistryConfig::select(None, Some(dir.path())).is_err());
+
+        let configured = dir.path().join("registry.yaml");
+        std::fs::write(&configured, "indexes: {}\n").unwrap();
+        assert!(RegistryConfig::select(None, Some(&configured)).is_err());
+        std::fs::write(&configured, "indexes:\n  private:\n    repo: {url: https://example.com/internal.git}\n    path: pinakes.yaml\n").unwrap();
+        let selected = RegistryConfig::select(None, Some(&configured)).unwrap();
+        assert_eq!(selected.indexes.keys().collect::<Vec<_>>(), vec!["private"]);
+        assert!(RegistryConfig::select(Some(&missing), Some(&configured)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_default_registry_symlink_is_an_error() {
+        let dir = tempdir().unwrap();
+        let configured = dir.path().join("registry.yaml");
+        std::os::unix::fs::symlink(dir.path().join("absent.yaml"), &configured).unwrap();
+        assert!(RegistryConfig::select(None, Some(&configured)).is_err());
     }
 
     #[test]

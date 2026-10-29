@@ -8,9 +8,9 @@ src = "docs"
 [output.html]
 default-theme = "navy"
 preferred-dark-theme = "navy"
-site-url = "/AIexandria/"
-git-repository-url = "https://codeberg.org/HelloNoel/AIexandria"
-edit-url-template = "https://codeberg.org/HelloNoel/AIexandria/_edit/master/docs/{path}"
+site-url = "/aiexandria/"
+git-repository-url = "https://github.com/HelloNoel/aiexandria"
+edit-url-template = "https://github.com/HelloNoel/aiexandria/edit/main/docs/{path}"
 
 [output.html.fold]
 enable = true

@@ -1,257 +1,57 @@
-# Getting started with AIexandria + Claude Code
+# Getting started
 
-This walks you through installing AIexandria, publishing an index alongside
-some docs, and wiring it into Claude Code as an MCP server.
+This guide takes you from installation to reading a real document with AIexandria v0.3.0. The public starter collection requires no Git hosting account or search service.
 
-## 1. Install AIexandria
+## 1. Install
 
-### Option A: prebuilt binary (recommended)
+Download your platform's archive from the [v0.3.0 release](https://github.com/HelloNoel/aiexandria/releases/tag/v0.3.0), extract it, and put the executable on PATH. See [installation](installation.md) for platform-specific commands and checksum verification.
 
-Download the archive for your platform from the
-[latest release](https://codeberg.org/HelloNoel/AIexandria/releases/latest):
+~~~sh
+aiexandria --version
+~~~
 
-| Platform | Asset |
-| --- | --- |
-| macOS (Apple Silicon) | `aiexandria-<version>-aarch64-apple-darwin.tar.gz` |
-| macOS (Intel) | `aiexandria-<version>-x86_64-apple-darwin.tar.gz` |
-| Linux (ARM64) | `aiexandria-<version>-aarch64-unknown-linux-gnu.tar.gz` |
-| Linux (x86_64) | `aiexandria-<version>-x86_64-unknown-linux-gnu.tar.gz` |
-| Windows (x86_64) | `aiexandria-<version>-x86_64-pc-windows-gnu.zip` |
+The output should report 0.3.0. Older binaries do not include the discovery tool or default collection described here.
 
-Extract it and move `aiexandria` onto your `PATH`:
+## 2. Connect your assistant
 
-```sh
-tar -xzf aiexandria-*-apple-darwin.tar.gz
-mkdir -p ~/.local/bin
-mv aiexandria ~/.local/bin/          # make sure ~/.local/bin is on your PATH
-```
+Choose your MCP client. These commands use an executable already on PATH.
 
-Optionally verify the download against the release's `SHA256SUMS`:
+**Codex:**
 
-```sh
-shasum -a 256 -c SHA256SUMS
-```
+~~~sh
+codex mcp add AIexandria -- aiexandria
+~~~
 
-On macOS the binary is unsigned, so the first run is blocked by Gatekeeper
-("cannot be opened because the developer cannot be verified"). Clear the
-quarantine flag once:
+**Claude Code:**
 
-```sh
-xattr -d com.apple.quarantine ~/.local/bin/aiexandria
-```
+~~~sh
+claude mcp add AIexandria --scope user -- aiexandria
+~~~
 
-### Option B: build from source
+For desktop clients or a command-not-found error, use the executable's absolute path. [Client configuration](installation.md#connect-an-mcp-client) includes configuration-file examples. Restart the client; use /mcp in Codex or Claude Code to inspect the connection.
 
-Needs a Rust toolchain (`rustup`).
+## 3. Read a document
 
-```sh
-git clone https://codeberg.org/HelloNoel/AIexandria.git aiexandria
-cd aiexandria
-cargo install --path .
-```
+Ask your assistant:
 
-This drops `aiexandria` into `~/.cargo/bin`.
+> Use AIexandria to open its getting-started guide and tell me which version it describes. Cite the document.
 
-### Verify
+A precise tool-level check uses read_doc with:
 
-```sh
-aiexandria --help
-```
+~~~json
+{"index":"aiexandria","entry_id":"getting-started","offset":1,"limit":40}
+~~~
 
-## 2. Publish an index in a docs repo
+It should return this guide and identify v0.3.0. The first call may wait while AIexandria acquires its help repository.
 
-AIexandria reads a YAML index from any git repo you point it at. You have
-two ways to author it.
+Then try:
 
-### Option A: generate it
+> Use AIexandria to find Rust documentation about ownership and borrowing. Read a relevant passage and explain the rule with a citation.
 
-Point the generator at the repo (local path or git URL):
+The assistant should discover a source, search or browse its selected pages, and read relevant text. The default registry contains public-docs and aiexandria. It does not clone all 20 upstream repositories at startup.
 
-```sh
-aiexandria generate \
-    --repo https://github.com/me/my-project \
-    --output pinakes.yaml
-```
+## 4. Make it your own
 
-This walks the tree, makes a `doc` entry for every markdown-ish file, an
-`index` entry for every non-empty subdirectory (with a nested
-`pinakes.yaml` written alongside), and an `index` entry pointing at the
-submodule's *own* repo for each git submodule. It also adds a default
-ripgrep `command_policy` plus a search command. Curate the output: drop
-anything you don't want exposed, and add `description:` fields so the LLM
-can pick well.
+[Add your documentation](adding-documentation.md) when you are ready. An explicit registry, or an existing registry at the default location, replaces the built-in defaults. Existing installations keep their own collection.
 
-### Option B: write it by hand
-
-Drop one into the root of a repo you want Claude to be able to read:
-
-```yaml
-# pinakes.yaml
-version: 1
-name: my-project
-description: "Internal docs for my-project"
-
-# Allow `command` entries to run ripgrep, scoped to docs/.
-command_policy:
-  allow: '^rg --max-count 20 -- .+ docs/$'
-  timeout_secs: 10
-
-entries:
-  - id: getting-started
-    name: Getting started
-    description: "Install + run my-project locally"
-    kind: doc
-    path: docs/getting-started.md
-
-  - id: api
-    name: API reference
-    description: "REST endpoints and error codes"
-    kind: index
-    path: docs/api/index.yaml
-
-  - id: search
-    name: Full-text search
-    description: "Substring search over docs/. Pass a query."
-    kind: command
-    argv: ["rg", "--max-count", "20", "--", "{query}", "docs/"]
-```
-
-Commit and push. AIexandria will clone this repo on demand the first time
-Claude reaches into it. If your repo uses git submodules to compose docs
-from elsewhere, AIexandria initializes them recursively on clone — your
-top-level index can either reference the submodule path directly (as a
-`doc`) or use an `index` entry with its own `repo:` block to descend into
-the linked repo's `pinakes.yaml`.
-
-The four entry kinds you can use:
-
-| `kind:` | Purpose |
-| --- | --- |
-| `doc` | A leaf text file Claude can read |
-| `index` | A child `pinakes.yaml` (same repo or a different one) |
-| `merge` | Inline another index's entries here — for shared/composed indexes |
-| `command` | A policy-controlled command (RAG, ripgrep, ...). `{query}` is replaced with Claude's input |
-
-`command` entries are gated by the `command_policy.allow` regex on the
-nearest enclosing index. The chain of regexes from root to leaf is
-*intersected* — children narrow but never widen.
-
-## 3. Create the local registry
-
-The registry tells your AIexandria instance which top-level indexes exist.
-Create it anywhere you like:
-
-```yaml
-# ~/.config/aiexandria/registry.yaml
-indexes:
-  my-project:
-    description: "My internal project docs"
-    repo:
-      url: git@github.com:me/my-project.git
-      branch: main
-    path: pinakes.yaml
-    refresh: 1h     # re-fetch at most once an hour
-
-  rust-book:
-    description: "The Rust Programming Language book"
-    repo:
-      url: https://github.com/rust-lang/book.git
-      branch: main
-    path: pinakes.yaml
-    refresh: 24h
-```
-
-`refresh:` accepts humantime (`5m`, `1h`, `24h`) or `never`. Repos are cloned
-lazily on first use and re-fetched lazily after the interval elapses — there's
-no background process.
-
-## 4. (Private repos only) Configure auth
-
-For private repos over HTTPS, drop a token config at the default path:
-
-```yaml
-# ~/.config/aiexandria/auth.yaml
-hosts:
-  github.com:
-    token_env: GITHUB_TOKEN
-  gitlab.example.com:
-    token_env: GITLAB_TOKEN
-    username: oauth2
-```
-
-Then export the token in the environment Claude Code runs in:
-
-```sh
-export GITHUB_TOKEN=ghp_xxx
-```
-
-For SSH URLs (`git@host:org/repo.git`), AIexandria uses `ssh-agent` — make
-sure `ssh-add` has loaded your key in the same shell that launches Claude
-Code.
-
-## 5. Wire it into Claude Code
-
-Register AIexandria as an MCP server. The simplest route is the `claude` CLI:
-
-```sh
-claude mcp add AIexandria \
-    --scope user \
-    -- aiexandria --registry ~/.config/aiexandria/registry.yaml --refresh 1h
-```
-
-Or add it manually to your settings — `~/.claude.json` (user scope) or
-`.mcp.json` in a project:
-
-```json
-{
-  "mcpServers": {
-    "AIexandria": {
-      "command": "aiexandria",
-      "args": [
-        "--registry", "/Users/you/.config/aiexandria/registry.yaml",
-        "--refresh", "1h"
-      ],
-      "env": {
-        "GITHUB_TOKEN": "ghp_xxx"
-      }
-    }
-  }
-}
-```
-
-Restart Claude Code (or run `/mcp` to reload).
-
-## 6. Try it
-
-In a Claude Code session, ask something like:
-
-> Use AIexandria to find the docs for our auth flow.
-
-Claude will call:
-
-1. `list_indexes` — to see what's available
-2. `list_docs` with `index: "my-project"` — to see the entries
-3. `read_doc` for the relevant leaf, `read_url` for a pasted repository link,
-   or `search_docs` (optionally with `deep: true`, or with `command_id: "search"`
-   to run your `rg` command); follow up on a search hit with `read_file` to
-   fetch the whole file
-
-You can confirm the server is healthy with `/mcp` inside Claude Code; it
-should show `AIexandria` as connected with its tools listed.
-
-## Troubleshooting
-
-- **"unknown index 'foo'"** — the name in your prompt doesn't match a key in
-  `registry.yaml`. Check `list_indexes`.
-- **"command '...' not allowed by regex ..."** — your `command` entry is
-  blocked by the `command_policy.allow` chain. Either widen the regex on the
-  index or change the command. Children can only *narrow* the parent's
-  regex; they cannot widen it.
-- **Auth failures** — confirm the env var is set in the shell that launches
-  Claude Code (not just your terminal). For SSH, confirm `ssh-add -l` lists
-  your key.
-- **Stale docs** — lower the `refresh:` on that registry entry, or delete the
-  cache directory: `rm -rf ~/.cache/aiexandria/repos`.
-- **Inspect raw MCP traffic** — run AIexandria once by hand with
-  `RUST_LOG=debug` and pipe a JSON-RPC `initialize` message into stdin to
-  confirm it responds.
+A successful connection does not mean every source is cached. On a slow first search, refresh_pending means acquisition is still running; retry after the suggested delay. See [troubleshooting](configuration.md#common-problems).

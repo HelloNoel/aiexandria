@@ -26,7 +26,7 @@ fn make_repo(dir: &Path) -> String {
 version: 1
 name: smoke
 command_policy:
-  allow: '^echo '
+  allow: '^git -c aiexandria.query='
 entries:
   - id: readme
     name: README
@@ -35,7 +35,7 @@ entries:
   - id: greet
     name: greet
     kind: command
-    argv: ["echo", "hi {query}"]
+    argv: ["git", "-c", "aiexandria.query=hi {query}", "config", "--get", "aiexandria.query"]
 "#,
     );
     write(&dir.join("README.md"), "smoke readme\n");
@@ -52,7 +52,7 @@ entries:
     let sig = Signature::now("t", "t@t").unwrap();
     repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
         .unwrap();
-    format!("file://{}", dir.display())
+    url::Url::from_directory_path(dir).unwrap().into()
 }
 
 fn read_response(reader: &mut BufReader<std::process::ChildStdout>, deadline: Instant) -> Value {
@@ -117,6 +117,10 @@ fn mcp_stdio_round_trip() {
     let init = read_response(&mut stdout, deadline);
     assert_eq!(init["id"], 1);
     assert!(init["result"]["serverInfo"].is_object());
+    let instructions = init["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("discover_sources"));
+    assert!(instructions.contains("not document evidence"));
+    assert!(instructions.contains("query guidance"));
 
     send(
         &mut stdin,
@@ -134,7 +138,23 @@ fn mcp_stdio_round_trip() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    for expected in ["list_indexes", "list_docs", "read_doc", "search_docs"] {
+    assert_eq!(names.len(), 7);
+    let search_schema = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "search_docs")
+        .unwrap();
+    assert!(search_schema["inputSchema"]["properties"]["refresh_wait_ms"].is_object());
+    for expected in [
+        "list_indexes",
+        "list_docs",
+        "read_doc",
+        "read_file",
+        "read_url",
+        "search_docs",
+        "discover_sources",
+    ] {
         assert!(names.contains(&expected), "missing tool {expected}");
     }
 
@@ -156,6 +176,59 @@ fn mcp_stdio_round_trip() {
     let cmd_text = cmd["result"]["content"][0]["text"].as_str().unwrap();
     assert_eq!(cmd_text.trim(), "hi world");
 
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0", "id":5, "method":"tools/call",
+        "params":{"name":"discover_sources", "arguments":{"query":"greet", "kinds":["command"]}}}),
+    );
+    let discovery = read_response(&mut stdout, deadline);
+    let result: Value =
+        serde_json::from_str(discovery["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(result["catalog"]["complete"], true);
+    let source_id = result["sources"][0]["source_id"].as_str().unwrap();
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0", "id":6, "method":"tools/call",
+        "params":{"name":"search_docs", "arguments":{"source_id":source_id, "query":"words AND (syntax.*)", "refresh_wait_ms":1000}}}),
+    );
+    let selected = read_response(&mut stdout, deadline);
+    assert_eq!(
+        selected["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .trim(),
+        "hi words AND (syntax.*)"
+    );
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0", "id":7, "method":"tools/call",
+        "params":{"name":"list_docs", "arguments":{"index":"smoke", "entry_id":"greet"}}}),
+    );
+    let guidance = read_response(&mut stdout, deadline);
+    let entries: Value =
+        serde_json::from_str(guidance["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(entries.as_array().unwrap().len(), 1);
+    assert_eq!(entries[0]["id"], "greet");
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0", "id":8, "method":"tools/call",
+        "params":{"name":"list_docs", "arguments":{"index":"smoke", "metadata_only":true}}}),
+    );
+    let metadata = read_response(&mut stdout, deadline);
+    let metadata: Value =
+        serde_json::from_str(metadata["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["name"], "smoke");
+    assert!(metadata.get("entries").is_none());
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0", "id":9, "method":"tools/call",
+        "params":{"name":"search_docs", "arguments":{"index":"smoke", "query":"x", "refresh_wait_ms":0}}}),
+    );
+    let invalid = read_response(&mut stdout, deadline);
+    assert!(invalid["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("refresh_wait_ms"));
     drop(stdin);
     let _ = child.wait();
 }

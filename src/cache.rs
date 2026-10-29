@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use git2::{build::RepoBuilder, Cred, FetchOptions, RemoteCallbacks, Repository};
 use sha2::{Digest, Sha256};
@@ -81,6 +81,134 @@ fn clone_job(dir: &Path, git_ref: &GitRef, auth: &AuthConfig) -> Arc<CloneJob> {
         *job_for_thread.result.lock().expect("clone job poisoned") = Some(outcome);
     });
     job
+}
+
+// Completed jobs remain available to callers that previously stopped waiting.
+// Only running jobs count against the limit; no queue of blocked refresh threads.
+const MAX_REFRESH_JOBS: usize = 8;
+
+#[derive(Clone)]
+struct RefreshFailure {
+    message: String,
+    requires_auth: bool,
+}
+
+struct RefreshJob {
+    started: Instant,
+    result: Mutex<Option<std::result::Result<(), RefreshFailure>>>,
+}
+
+fn refresh_registry() -> &'static Mutex<std::collections::HashMap<PathBuf, Arc<RefreshJob>>> {
+    static REGISTRY: OnceLock<Mutex<std::collections::HashMap<PathBuf, Arc<RefreshJob>>>> =
+        OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn refresh_job(
+    cache: &RepoCache,
+    dir: &Path,
+    git_ref: &GitRef,
+    policy: RefreshPolicy,
+) -> Option<Arc<RefreshJob>> {
+    let mut jobs = refresh_registry()
+        .lock()
+        .expect("refresh registry poisoned");
+    if let Some(job) = jobs.get(dir) {
+        return Some(job.clone());
+    }
+    if jobs
+        .values()
+        .filter(|job| job.result.lock().expect("refresh job poisoned").is_none())
+        .count()
+        >= MAX_REFRESH_JOBS
+    {
+        return None;
+    }
+    let job = Arc::new(RefreshJob {
+        started: Instant::now(),
+        result: Mutex::new(None),
+    });
+    jobs.insert(dir.to_path_buf(), job.clone());
+    drop(jobs);
+    let cache = cache.clone();
+    let dir = dir.to_path_buf();
+    let git_ref = git_ref.clone();
+    let worker_job = job.clone();
+    let spawned = std::thread::Builder::new()
+        .name("repo-refresh".into())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let lock = dir_lock(&dir);
+                let _guard = lock.lock().expect("dir lock poisoned");
+                if git_ref.commit.is_none() && cache.refresh_due(&dir, policy) {
+                    cache.refresh(&dir, &git_ref)?;
+                    std::fs::write(dir.join(FRESHNESS_FILE), b"")?;
+                }
+                Ok::<(), AIexError>(())
+            }))
+            .unwrap_or_else(|_| {
+                Err(AIexError::Other(
+                    "repository refresh worker panicked".into(),
+                ))
+            })
+            .map_err(|error| RefreshFailure {
+                requires_auth: matches!(error, AIexError::MissingToken { .. }),
+                message: error.to_string(),
+            });
+            *worker_job.result.lock().expect("refresh job poisoned") = Some(result);
+        });
+    if let Err(error) = spawned {
+        *job.result.lock().expect("refresh job poisoned") = Some(Err(RefreshFailure {
+            message: error.to_string(),
+            requires_auth: false,
+        }));
+    }
+    Some(job)
+}
+
+fn wait_for_refresh(
+    dir: &Path,
+    git_ref: &GitRef,
+    job: Arc<RefreshJob>,
+    deadline: Option<Instant>,
+) -> Result<bool> {
+    loop {
+        let result = job.result.lock().expect("refresh job poisoned").clone();
+        if let Some(result) = result {
+            let mut jobs = refresh_registry()
+                .lock()
+                .expect("refresh registry poisoned");
+            if jobs
+                .get(dir)
+                .is_some_and(|current| Arc::ptr_eq(current, &job))
+            {
+                jobs.remove(dir);
+            }
+            return match result {
+                Ok(()) => Ok(false),
+                Err(error) if deadline.is_some() || error.requires_auth => {
+                    Err(AIexError::RefreshFailed(error.message))
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        url = git_ref.url,
+                        error = error.message,
+                        "refresh failed, keeping cached copy"
+                    );
+                    Ok(true)
+                }
+            };
+        }
+        if deadline.is_some_and(|end| Instant::now() >= end) {
+            return Err(AIexError::RefreshPending);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn checkout_lock_for_test(dir: &Path) -> Arc<Mutex<()>> {
+    dir_lock(dir)
 }
 
 /// The actual clone + checkout + submodule init. Blocking; run on a worker
@@ -225,6 +353,7 @@ impl RefreshPolicy {
     }
 }
 
+#[derive(Clone)]
 pub struct RepoCache {
     root: PathBuf,
     auth: AuthConfig,
@@ -270,37 +399,91 @@ impl RepoCache {
     /// retry shortly. A warm cache (or a fast clone that finishes within the
     /// budget) returns the path directly.
     pub fn ensure_with(&self, git_ref: &GitRef, policy: RefreshPolicy) -> Result<PathBuf> {
+        self.ensure_with_status(git_ref, policy).map(|(dir, _)| dir)
+    }
+
+    /// Whether acquisition fell back to a cached checkout after a failed refresh.
+    pub(crate) fn ensure_with_status(
+        &self,
+        git_ref: &GitRef,
+        policy: RefreshPolicy,
+    ) -> Result<(PathBuf, bool)> {
+        self.ensure_until(git_ref, policy, None)
+    }
+
+    /// Search preparation requires fresh data and shares one request-wide deadline.
+    pub(crate) fn ensure_fresh_until(
+        &self,
+        git_ref: &GitRef,
+        policy: RefreshPolicy,
+        deadline: Instant,
+    ) -> Result<PathBuf> {
+        self.ensure_until(git_ref, policy, Some(deadline))
+            .map(|(dir, _)| dir)
+    }
+
+    fn ensure_until(
+        &self,
+        git_ref: &GitRef,
+        policy: RefreshPolicy,
+        deadline: Option<Instant>,
+    ) -> Result<(PathBuf, bool)> {
+        let requested = Instant::now();
         git_ref.validate()?;
         self.auth
             .resolve(&git_ref.url, git_ref.token_env.as_deref())?;
         let dir = self.path_for(git_ref);
-        let existing_job = clone_registry()
-            .lock()
-            .expect("clone registry poisoned")
-            .get(&dir)
-            .cloned();
-        if existing_job.is_none() && checkout_ready(&dir, git_ref) {
-            let lock = dir_lock(&dir);
-            let _guard = lock.lock().expect("dir lock poisoned");
-            if checkout_ready(&dir, git_ref) {
-                if git_ref.commit.is_none() && self.refresh_due(&dir, policy) {
-                    if let Err(error) = self.refresh(&dir, git_ref) {
-                        if matches!(error, AIexError::MissingToken { .. }) {
-                            return Err(error);
-                        }
-                        tracing::warn!(
-                            "refresh of {} failed, keeping cached copy: {error}",
-                            git_ref.url
-                        );
-                    } else {
-                        std::fs::write(dir.join(FRESHNESS_FILE), b"")?;
-                    }
-                }
-                return Ok(dir);
+        loop {
+            if deadline.is_some_and(|end| Instant::now() >= end) {
+                return Err(AIexError::RefreshPending);
             }
+            let clone = clone_registry()
+                .lock()
+                .expect("clone registry poisoned")
+                .get(&dir)
+                .cloned();
+            if clone.is_some() || !checkout_ready(&dir, git_ref) {
+                let job = clone.unwrap_or_else(|| clone_job(&dir, git_ref, &self.auth));
+                let budget = deadline.map_or(INLINE_CLONE_BUDGET, |end| {
+                    end.saturating_duration_since(Instant::now())
+                });
+                let cloned =
+                    wait_for_clone(&dir, git_ref, job, budget).map_err(|error| match error {
+                        AIexError::Warming { .. } if deadline.is_some() => {
+                            AIexError::RefreshPending
+                        }
+                        other => other,
+                    })?;
+                // A completed clone may have gone unobserved long enough to need a refresh.
+                if deadline.is_some() {
+                    continue;
+                }
+                return Ok((cloned, false));
+            }
+            let existing = refresh_registry()
+                .lock()
+                .expect("refresh registry poisoned")
+                .get(&dir)
+                .cloned();
+            if existing.is_none() && (git_ref.commit.is_some() || !self.refresh_due(&dir, policy)) {
+                return Ok((dir, false));
+            }
+            if let Some(job) = existing.or_else(|| refresh_job(self, &dir, git_ref, policy)) {
+                let predates_request = job.started < requested;
+                let stale = wait_for_refresh(&dir, git_ref, job, deadline)?;
+                // An old completed job does not suppress a refresh which is now due.
+                if !stale
+                    && predates_request
+                    && git_ref.commit.is_none()
+                    && self.refresh_due(&dir, policy)
+                {
+                    continue;
+                }
+                return Ok((dir, stale));
+            }
+            // All refresh slots are occupied. Keep the request's original deadline.
+            std::thread::sleep(Duration::from_millis(10));
         }
-        let job = existing_job.unwrap_or_else(|| clone_job(&dir, git_ref, &self.auth));
-        wait_for_clone(&dir, git_ref, job, INLINE_CLONE_BUDGET)
     }
 
     fn refresh_due(&self, dir: &Path, policy: RefreshPolicy) -> bool {
@@ -488,6 +671,125 @@ fn update_submodules(repo: &Repository, auth: &AuthConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_deadline_reuses_the_same_background_job() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = temp.path().join("remote");
+        let repo = Repository::init_opts(
+            &remote,
+            git2::RepositoryInitOptions::new().initial_head("main"),
+        )
+        .unwrap();
+        let commit = |body: &str| {
+            std::fs::write(remote.join("README.md"), body).unwrap();
+            let mut index = repo.index().unwrap();
+            index
+                .add_all(["."], git2::IndexAddOption::DEFAULT, None)
+                .unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::now("test", "test@example.org").unwrap();
+            let parent = repo.head().ok().map(|head| head.peel_to_commit().unwrap());
+            repo.commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "fixture",
+                &tree,
+                &parent.iter().collect::<Vec<_>>(),
+            )
+            .unwrap();
+        };
+        commit("old");
+        let origin = GitRef {
+            url: url::Url::from_directory_path(&remote).unwrap().into(),
+            branch: Some("main".into()),
+            ..Default::default()
+        };
+        let cache = RepoCache::new(temp.path().join("cache"), AuthConfig::default());
+        let cached = cache.ensure(&origin).unwrap();
+        commit("fresh");
+        std::fs::remove_file(cached.join(FRESHNESS_FILE)).unwrap();
+        let lock = dir_lock(&cached);
+        let guard = lock.lock().unwrap();
+        let policy = RefreshPolicy::Every(Duration::from_secs(3600));
+        assert!(matches!(
+            cache.ensure_fresh_until(&origin, policy, Instant::now() + Duration::from_millis(30)),
+            Err(AIexError::RefreshPending)
+        ));
+        let first = refresh_registry()
+            .lock()
+            .unwrap()
+            .get(&cached)
+            .unwrap()
+            .clone();
+        assert!(matches!(
+            cache.ensure_fresh_until(&origin, policy, Instant::now() + Duration::from_millis(30)),
+            Err(AIexError::RefreshPending)
+        ));
+        let second = refresh_registry()
+            .lock()
+            .unwrap()
+            .get(&cached)
+            .unwrap()
+            .clone();
+        assert!(Arc::ptr_eq(&first, &second));
+        drop(guard);
+        cache
+            .ensure_fresh_until(&origin, policy, Instant::now() + Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(cached.join("README.md")).unwrap(),
+            "fresh"
+        );
+        // A caller can return long after a timed-out job completed. That old
+        // completion must not suppress a refresh which has since become due.
+        commit("newer");
+        std::fs::remove_file(cached.join(FRESHNESS_FILE)).unwrap();
+        refresh_registry().lock().unwrap().insert(
+            cached.clone(),
+            Arc::new(RefreshJob {
+                started: Instant::now(),
+                result: Mutex::new(Some(Ok(()))),
+            }),
+        );
+        cache
+            .ensure_fresh_until(&origin, policy, Instant::now() + Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(cached.join("README.md")).unwrap(),
+            "newer"
+        );
+    }
+
+    #[test]
+    fn cold_clone_uses_the_search_deadline_and_keeps_the_job_for_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = RepoCache::new(temp.path().join("cache"), AuthConfig::default());
+        let origin = GitRef {
+            url: "file:///unused".into(),
+            ..Default::default()
+        };
+        let dir = cache.path_for(&origin);
+        let job = Arc::new(CloneJob {
+            result: Mutex::new(None),
+        });
+        clone_registry()
+            .lock()
+            .unwrap()
+            .insert(dir.clone(), job.clone());
+        let start = Instant::now();
+        let result = cache.ensure_fresh_until(
+            &origin,
+            RefreshPolicy::Never,
+            start + Duration::from_millis(30),
+        );
+        let remaining = clone_registry().lock().unwrap().remove(&dir).unwrap();
+        assert!(matches!(result, Err(AIexError::RefreshPending)));
+        assert!(start.elapsed() < Duration::from_millis(300));
+        assert!(Arc::ptr_eq(&job, &remaining));
+    }
 
     #[test]
     fn cache_identity_includes_ref_namespace_and_checkout_options() {
