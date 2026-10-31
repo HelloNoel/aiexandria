@@ -37,6 +37,10 @@ mod search_tests;
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ListDocsRequest {
+    #[serde(default)]
+    pub freshness: crate::cache::Freshness,
+    #[serde(default)]
+    pub refresh_wait_ms: Option<u64>,
     /// Name of the registered top-level index (see `list_indexes`).
     pub index: String,
     /// Array of entry IDs to descend through. Omit for the root.
@@ -52,6 +56,12 @@ pub struct ListDocsRequest {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ReadDocRequest {
+    #[serde(default)]
+    pub freshness: crate::cache::Freshness,
+    #[serde(default)]
+    pub refresh_wait_ms: Option<u64>,
+    #[serde(default)]
+    pub snapshot: Option<String>,
     pub index: String,
     /// Array of entry IDs to descend through. Omit for the root.
     #[serde(default)]
@@ -68,6 +78,12 @@ pub struct ReadDocRequest {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ReadFileRequest {
+    #[serde(default)]
+    pub freshness: crate::cache::Freshness,
+    #[serde(default)]
+    pub refresh_wait_ms: Option<u64>,
+    #[serde(default)]
+    pub snapshot: Option<String>,
     pub index: String,
     /// Array of entry IDs to descend through. Omit for the root.
     #[serde(default)]
@@ -121,6 +137,12 @@ fn window(body: &str, offset: Option<usize>, limit: Option<usize>) -> Result<Str
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ReadUrlRequest {
+    #[serde(default)]
+    pub freshness: crate::cache::Freshness,
+    #[serde(default)]
+    pub refresh_wait_ms: Option<u64>,
+    #[serde(default)]
+    pub snapshot: Option<String>,
     /// A web URL to a file in a repo that appears somewhere in the index,
     /// e.g. `https://github.com/org/repo/blob/main/docs/x.md`.
     pub url: String,
@@ -240,6 +262,8 @@ fn select_origin(
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SearchDocsRequest {
+    #[serde(default)]
+    pub freshness: crate::cache::Freshness,
     /// Registered index, required when source_id is omitted.
     #[serde(default)]
     pub index: Option<String>,
@@ -266,6 +290,7 @@ enum PreparedSearch {
     Command {
         entry: Box<ResolvedEntry>,
         dir: PathBuf,
+        _view: crate::cache::CommandView,
     },
     Browse {
         level: Box<LoadedIndex>,
@@ -277,7 +302,7 @@ impl PreparedSearch {
     // No acquisition or refresh happens here. A timed-out preparation never runs this stage.
     fn execute(self, cache: &RepoCache, query: &str) -> crate::error::Result<CallToolResult> {
         let body = match self {
-            Self::Command { entry, dir } => {
+            Self::Command { entry, dir, _view } => {
                 let EntryKind::Command {
                     argv,
                     success_exit_codes,
@@ -312,6 +337,52 @@ impl PreparedSearch {
     }
 }
 
+fn preparing(phase: &str) -> CallToolResult {
+    let data = serde_json::json!({"status":"preparing","phase":phase,"retry_after_ms":2000,"message":"Repository preparation is pending; no search or read result is available yet. Retry after the suggested delay."});
+    let mut result = CallToolResult::success(vec![ContentBlock::text(data.to_string())]);
+    result.structured_content = Some(data);
+    result
+}
+fn finish_result(
+    result: Result<CallToolResult, McpError>,
+    cache: &RepoCache,
+) -> Result<CallToolResult, McpError> {
+    match result {
+        Err(error)
+            if error
+                .data
+                .as_ref()
+                .is_some_and(|d| d["status"] == "refresh_pending")
+                || error.message.contains("refresh wait limit reached")
+                || error.message.contains("still being fetched") =>
+        {
+            Ok(preparing("acquisition"))
+        }
+        Err(error) if error.code == rmcp::model::ErrorCode::INTERNAL_ERROR => {
+            let mut result =
+                CallToolResult::error(vec![ContentBlock::text(error.message.to_string())]);
+            result.structured_content = Some(serde_json::json!({"status":"failed"}));
+            Ok(result)
+        }
+        Err(error) => Err(error),
+        Ok(mut result) => {
+            let metadata = cache.response_metadata();
+            if let Some(token) = metadata["snapshot"].as_str() {
+                let stale = metadata["stale_repositories"].as_u64().unwrap_or(0);
+                result.content.push(ContentBlock::text(format!(
+                    "Snapshot: {token}{}",
+                    if stale > 0 {
+                        "; cached content, refresh pending or failed"
+                    } else {
+                        ""
+                    }
+                )));
+            }
+            result.structured_content = Some(metadata);
+            Ok(result)
+        }
+    }
+}
 fn search_error(error: AIexError) -> McpError {
     match error {
         AIexError::RefreshPending => McpError::internal_error(
@@ -366,6 +437,7 @@ struct ListIndexesItem {
 
 #[derive(Clone)]
 pub struct AIexandriaServer {
+    request_cache: Option<RepoCache>,
     inner: Arc<ServerInner>,
     #[allow(dead_code)] // populated and used via the #[tool_handler] macro
     tool_router: ToolRouter<AIexandriaServer>,
@@ -380,11 +452,47 @@ struct ServerInner {
 
 #[tool_router]
 impl AIexandriaServer {
+    fn cache(&self) -> &RepoCache {
+        self.request_cache.as_ref().unwrap_or(&self.inner.cache)
+    }
+
+    async fn run_request<F>(
+        &self,
+        freshness: crate::cache::Freshness,
+        wait: Option<u64>,
+        operation: F,
+    ) -> Result<CallToolResult, McpError>
+    where
+        F: FnOnce(Self) -> Result<CallToolResult, McpError> + Send + 'static,
+    {
+        let wait = wait.unwrap_or(5000);
+        if !(1..=30_000).contains(&wait) {
+            return Err(McpError::invalid_params(
+                "refresh_wait_ms must be between 1 and 30000",
+                None,
+            ));
+        }
+        let deadline = Instant::now() + Duration::from_millis(wait);
+        let cache = self.cache().session(freshness, deadline);
+        let mut server = self.clone();
+        server.request_cache = Some(cache.clone());
+        match tokio::time::timeout_at(
+            deadline.into(),
+            tokio::task::spawn_blocking(move || operation(server)),
+        )
+        .await
+        {
+            Err(_) => Ok(preparing("acquisition")),
+            Ok(Err(error)) => Err(McpError::internal_error(error.to_string(), None)),
+            Ok(Ok(result)) => finish_result(result, &cache),
+        }
+    }
     pub fn new(registry: RegistryConfig, cache: RepoCache) -> Self {
         let registry = Arc::new(registry);
         let cache = Arc::new(cache);
         let discovery = DiscoveryService::new(registry.clone(), cache.clone());
         Self {
+            request_cache: None,
             inner: Arc::new(ServerInner {
                 registry,
                 cache,
@@ -403,7 +511,7 @@ impl AIexandriaServer {
         }
     }
 
-    async fn root_for(&self, name: &str) -> Result<LoadedIndex, McpError> {
+    fn root_for(&self, name: &str) -> Result<LoadedIndex, McpError> {
         let entry: &RegistryEntry = self
             .inner
             .registry
@@ -411,7 +519,7 @@ impl AIexandriaServer {
             .get(name)
             .ok_or_else(|| McpError::invalid_params(format!("unknown index '{name}'"), None))?;
         let refresh = self.refresh_for(entry);
-        let resolver = Resolver::new(&self.inner.cache);
+        let resolver = Resolver::new(self.cache());
         resolver
             .load_index_with_refresh(
                 &entry.repo,
@@ -422,19 +530,18 @@ impl AIexandriaServer {
             .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
-    async fn walk_to(&self, index: &str, path: &[String]) -> Result<LoadedIndex, McpError> {
-        let mut current = self.root_for(index).await?;
+    fn walk_to(&self, index: &str, path: &[String]) -> Result<LoadedIndex, McpError> {
+        let mut current = self.root_for(index)?;
         for step in path {
-            let resolver = Resolver::new(&self.inner.cache);
-            current = descend(&resolver, &current, step)
-                .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+            let resolver = Resolver::new(self.cache());
+            current = descend(&resolver, &current, step).map_err(search_error)?;
         }
         Ok(current)
     }
 
     /// Find an entry's repo (anywhere in any registered index tree) whose URL
     /// matches `target`. Used by `read_url` to gate reads to indexed repos.
-    fn find_origins(&self, target: &str) -> Result<Vec<(GitRef, RefreshPolicy)>, String> {
+    fn find_origins(&self, target: &str) -> crate::error::Result<Vec<(GitRef, RefreshPolicy)>> {
         fn walk(
             cache: &RepoCache,
             origin: &GitRef,
@@ -456,7 +563,7 @@ impl AIexandriaServer {
             }
             // Inspect references before merge flattening, which can erase the
             // repository of an empty merge or one whose entries override it.
-            let dir = cache.ensure_with(origin, refresh)?;
+            let (dir, _) = cache.ensure_path(origin, refresh, path)?;
             let body = cache.read_file(&dir, path)?;
             let idx = Index::parse(&body, &format!("{}:{path}", origin.url))?;
             for entry in &idx.entries {
@@ -499,7 +606,7 @@ impl AIexandriaServer {
             let refresh = self.refresh_for(entry);
             let mut matches = Vec::new();
             if let Err(err) = walk(
-                &self.inner.cache,
+                self.cache(),
                 &entry.repo,
                 &entry.path,
                 refresh,
@@ -507,7 +614,7 @@ impl AIexandriaServer {
                 &mut visited,
                 &mut matches,
             ) {
-                first_error.get_or_insert(err.to_string());
+                first_error.get_or_insert(err);
             }
             // A failed child must not discard references already discovered,
             // including the registry's root repository. Auth and checkout
@@ -526,7 +633,7 @@ impl AIexandriaServer {
         if !found.is_empty() {
             Ok(found)
         } else if let Some(err) = first_error {
-            Err(format!("could not search every registered index: {err}"))
+            Err(err)
         } else {
             Ok(found)
         }
@@ -582,7 +689,13 @@ impl AIexandriaServer {
         &self,
         Parameters(req): Parameters<ListDocsRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let level = self.walk_to(&req.index, &req.path).await?;
+        self.run_request(req.freshness, req.refresh_wait_ms, move |server| {
+            server.list_docs_impl(req)
+        })
+        .await
+    }
+    fn list_docs_impl(&self, req: ListDocsRequest) -> Result<CallToolResult, McpError> {
+        let level = self.walk_to(&req.index, &req.path)?;
         if req.metadata_only {
             if req.entry_id.is_some() {
                 return Err(McpError::invalid_params(
@@ -617,11 +730,22 @@ impl AIexandriaServer {
         &self,
         Parameters(req): Parameters<ReadDocRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let level = self.walk_to(&req.index, &req.path).await?;
+        self.run_request(req.freshness, req.refresh_wait_ms, move |server| {
+            server.read_doc_impl(req)
+        })
+        .await
+    }
+    fn read_doc_impl(&self, req: ReadDocRequest) -> Result<CallToolResult, McpError> {
+        let level = self.walk_to(&req.index, &req.path)?;
         let entry = level.find(&req.entry_id).ok_or_else(|| {
             McpError::invalid_params(format!("entry '{}' not found", req.entry_id), None)
         })?;
-        let resolver = Resolver::new(&self.inner.cache);
+        let resolver = Resolver::new(self.cache());
+        if let Some(token) = &req.snapshot {
+            self.cache()
+                .apply_snapshot(&entry.origin, token)
+                .map_err(search_error)?;
+        }
         let body = resolver
             .read_doc(entry)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -637,18 +761,27 @@ impl AIexandriaServer {
         &self,
         Parameters(req): Parameters<ReadFileRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let level = self.walk_to(&req.index, &req.path).await?;
+        self.run_request(req.freshness, req.refresh_wait_ms, move |server| {
+            server.read_file_impl(req)
+        })
+        .await
+    }
+    fn read_file_impl(&self, req: ReadFileRequest) -> Result<CallToolResult, McpError> {
+        let level = self.walk_to(&req.index, &req.path)?;
         let entry = level.find(&req.entry_id).ok_or_else(|| {
             McpError::invalid_params(format!("entry '{}' not found", req.entry_id), None)
         })?;
-        let dir = self
-            .inner
-            .cache
-            .ensure_with(&entry.origin, entry.refresh)
+        if let Some(token) = &req.snapshot {
+            self.cache()
+                .apply_snapshot(&entry.origin, token)
+                .map_err(search_error)?;
+        }
+        let (dir, _) = self
+            .cache()
+            .ensure_path(&entry.origin, entry.refresh, &req.file)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let body = self
-            .inner
-            .cache
+            .cache()
             .read_file(&dir, &req.file)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
         let body =
@@ -663,15 +796,19 @@ impl AIexandriaServer {
         &self,
         Parameters(req): Parameters<ReadUrlRequest>,
     ) -> Result<CallToolResult, McpError> {
+        self.run_request(req.freshness, req.refresh_wait_ms, move |server| {
+            server.read_url_impl(req)
+        })
+        .await
+    }
+    fn read_url_impl(&self, req: ReadUrlRequest) -> Result<CallToolResult, McpError> {
         let (repo, tail) = split_file_url(&req.url).ok_or_else(|| {
             McpError::invalid_params(
                 "unrecognized file URL; expected a .../blob/<ref>/<path> style link".to_string(),
                 None,
             )
         })?;
-        let candidates = self
-            .find_origins(&repo)
-            .map_err(|e| McpError::internal_error(e, None))?;
+        let candidates = self.find_origins(&repo).map_err(search_error)?;
         let (git_ref, refresh) = select_origin(candidates, &tail)
             .map_err(|e| McpError::invalid_params(e, None))?
             .ok_or_else(|| {
@@ -683,14 +820,17 @@ impl AIexandriaServer {
                 None,
             )
         })?;
-        let dir = self
-            .inner
-            .cache
-            .ensure_with(&git_ref, refresh)
+        if let Some(token) = &req.snapshot {
+            self.cache()
+                .apply_snapshot(&git_ref, token)
+                .map_err(search_error)?;
+        }
+        let (dir, _) = self
+            .cache()
+            .ensure_path(&git_ref, refresh, &rel)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let body = self
-            .inner
-            .cache
+            .cache()
             .read_file(&dir, &rel)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
         let body =
@@ -699,7 +839,7 @@ impl AIexandriaServer {
     }
 
     #[tool(
-        description = "Search one source_id or explicit index/path. Commands keep their own query syntax; follow source guidance. Built-in mode matches case-insensitive substrings; deep reads current-level docs without descending. Refresh preparation waits up to refresh_wait_ms (default 5000), then reports refresh_pending for retry. Command execution has a separate policy timeout. Read relevant hits with read_file."
+        description = "Search one source_id or explicit index/path. Commands keep their own query syntax; follow source guidance. Built-in mode matches case-insensitive substrings; deep reads current-level docs without descending. Cached results remain usable during background refresh. Missing content waits up to refresh_wait_ms (default 5000), then returns status=preparing; no search ran. Command execution has a separate policy timeout. Read relevant hits with read_file and the returned snapshot token."
     )]
     async fn search_docs(
         &self,
@@ -733,39 +873,36 @@ impl AIexandriaServer {
             ));
         }
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
-        let permit = self
-            .inner
-            .search_slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| {
-                McpError::internal_error(
-                    "search is busy; retry shortly",
-                    Some(serde_json::json!({
-                        "status":"search_busy", "retry_after_ms":1000
-                    })),
-                )
-            })?;
-        let server = self.clone();
+        let permit = match self.inner.search_slots.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => return Ok(preparing("busy")),
+        };
+        let cache = self.cache().session(req.freshness, deadline);
+        let mut server = self.clone();
+        server.request_cache = Some(cache.clone());
         let prepare = tokio::task::spawn_blocking(move || {
             // Retain the slot even if the caller stops waiting on this worker.
             let prepared =
                 server.prepare_search(&index, &path, command_id.as_deref(), req.deep, deadline)?;
             Ok::<_, AIexError>((prepared, permit))
         });
-        let (prepared, permit) = tokio::time::timeout_at(deadline.into(), prepare)
-            .await
-            .map_err(|_| search_error(AIexError::RefreshPending))?
-            .map_err(|e| McpError::internal_error(format!("search preparation failed: {e}"), None))?
-            .map_err(search_error)?;
+        let (prepared, permit) = match tokio::time::timeout_at(deadline.into(), prepare).await {
+            Err(_) => return Ok(preparing("acquisition")),
+            Ok(Err(error)) => return Err(McpError::internal_error(error.to_string(), None)),
+            Ok(Ok(Err(error))) => return finish_result(Err(search_error(error)), &cache),
+            Ok(Ok(Ok(result))) => result,
+        };
         // A ready worker result and deadline can arrive together. Never execute an expired request.
         if Instant::now() >= deadline {
-            return Err(search_error(AIexError::RefreshPending));
+            return Ok(preparing("acquisition"));
         }
-        let cache = self.inner.cache.clone();
+        let metadata_cache = cache.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            prepared.execute(&cache, &req.query).map_err(search_error)
+            finish_result(
+                prepared.execute(&cache, &req.query).map_err(search_error),
+                &metadata_cache,
+            )
         })
         .await
         .map_err(|e| McpError::internal_error(format!("search execution failed: {e}"), None))?
@@ -779,13 +916,16 @@ impl AIexandriaServer {
         deep: bool,
         deadline: Instant,
     ) -> crate::error::Result<PreparedSearch> {
+        if Instant::now() >= deadline {
+            return Err(AIexError::RefreshPending);
+        }
         let root = self
             .inner
             .registry
             .indexes
             .get(index)
             .ok_or_else(|| AIexError::IndexNotFound { name: index.into() })?;
-        let resolver = Resolver::with_deadline(&self.inner.cache, deadline);
+        let resolver = Resolver::new(self.cache());
         let mut level = resolver.load_index_with_refresh(
             &root.repo,
             &root.path,
@@ -804,17 +944,38 @@ impl AIexandriaServer {
                 return Err(AIexError::Other("not a command entry".into()));
             }
             let (dir, _) = resolver.ensure(&entry.origin, entry.refresh)?;
+            let view = self.cache().execution_view(&dir)?;
             return Ok(PreparedSearch::Command {
                 entry: Box::new(entry),
-                dir,
+                dir: view.path().to_path_buf(),
+                _view: view,
             });
         }
         let mut docs = BTreeMap::new();
         if deep {
+            let mut groups = BTreeMap::<PathBuf, Vec<&ResolvedEntry>>::new();
             for entry in &level.entries {
                 if matches!(entry.entry.kind, EntryKind::Doc { .. }) {
-                    let (dir, _) = resolver.ensure(&entry.origin, entry.refresh)?;
-                    docs.insert(entry.view.id.clone(), dir);
+                    // Validate every route's explicit credential requirement.
+                    groups
+                        .entry(self.cache().path_for(&entry.origin))
+                        .or_default()
+                        .push(entry);
+                }
+            }
+            for entries in groups.values() {
+                let first = entries[0];
+                let paths = entries.iter().map(|entry| {
+                    let EntryKind::Doc { path, .. } = &entry.entry.kind else {
+                        unreachable!()
+                    };
+                    path.clone()
+                });
+                let dir = self
+                    .cache()
+                    .ensure_paths(&first.origin, first.refresh, paths)?;
+                for entry in entries {
+                    docs.insert(entry.view.id.clone(), dir.clone());
                 }
             }
         }
@@ -920,7 +1081,10 @@ mod tests {
             )
         };
         // The narrower policy inherited from a merge still applies.
-        assert!(server.search_docs(request()).await.is_err());
+        assert_eq!(
+            server.search_docs(request()).await.unwrap().is_error,
+            Some(true)
+        );
         let cached = server.inner.cache.ensure(&origin).unwrap();
         std::fs::write(
             cached.join("merged.yaml"),
@@ -937,7 +1101,10 @@ mod tests {
             root.replace("^git --version$", "^nothing$"),
         )
         .unwrap();
-        assert!(server.search_docs(request()).await.is_err());
+        assert_eq!(
+            server.search_docs(request()).await.unwrap().is_error,
+            Some(true)
+        );
         std::fs::write(
             cached.join("merged.yaml"),
             "version: 1\nname: Empty\nentries: []",
@@ -1145,10 +1312,31 @@ mod url_lookup_tests {
     }
     fn cached(root: &std::path::Path, git: &GitRef, yaml: &str) {
         let cache = RepoCache::new(root.into(), crate::auth::AuthConfig::default());
-        let dir = cache.path_for(git);
+        let base = cache.path_for(git);
+        let dir = base.join("snapshot-fixture");
         git2::Repository::init(&dir).unwrap();
         std::fs::write(dir.join(".git/aiexandria-ready"), b"1").unwrap();
         std::fs::write(dir.join("pinakes.yaml"), yaml).unwrap();
+        std::fs::write(dir.join(".git/HEAD"), "fixture\n").unwrap();
+        crate::cache::atomic_json(
+            &base.join("state.json"),
+            &crate::cache::CacheState {
+                origin: git.clone(),
+                current: Some("snapshot-fixture".into()),
+                checked_ms: crate::cache::now_ms(),
+                attempted_ms: 0,
+                snapshots: vec![crate::cache::Snapshot {
+                    name: "snapshot-fixture".into(),
+                    revision: "fixture".into(),
+                    selection: crate::cache::Selection::all(),
+                    created_ms: crate::cache::now_ms(),
+                }],
+                failure: None,
+                retry_ms: 0,
+                failures: 0,
+            },
+        )
+        .unwrap();
     }
     fn server(root: &std::path::Path, yaml: &str) -> AIexandriaServer {
         let git = reference("https://github.com/org/root.git");

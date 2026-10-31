@@ -95,12 +95,12 @@ struct Gate {
 }
 impl Gate {
     fn hold(dir: &Path) -> Self {
-        std::fs::remove_file(dir.join(".pinakes-fetched")).unwrap();
-        let lock = crate::cache::checkout_lock_for_test(dir);
+        expire(dir);
+        let lock = crate::cache::lock_file(&dir.parent().unwrap().join("job.lock")).unwrap();
         let (ready_tx, ready_rx) = mpsc::channel();
         let (release, wait) = mpsc::channel();
         let worker = std::thread::spawn(move || {
-            let _guard = lock.lock().unwrap();
+            lock.lock().unwrap();
             ready_tx.send(()).unwrap();
             let _ = wait.recv_timeout(Duration::from_secs(2));
         });
@@ -120,28 +120,41 @@ impl Drop for Gate {
 
 const COMMAND: &str = "version: 1\nname: Test\ncommand_policy: {allow: '^git init -- marker$'}\nentries:\n - {id: search, name: Search, kind: command, argv: [git, init, --, marker]}\n";
 
-fn assert_pending(error: &McpError) {
-    assert_eq!(error.data.as_ref().unwrap()["status"], "refresh_pending");
-    assert_eq!(error.data.as_ref().unwrap()["retry_after_ms"], 1000);
+fn assert_pending(result: &CallToolResult) {
+    assert_eq!(
+        result.structured_content.as_ref().unwrap()["status"],
+        "preparing"
+    );
+    assert_eq!(
+        result.structured_content.as_ref().unwrap()["retry_after_ms"],
+        2000
+    );
+}
+fn expire(dir: &Path) {
+    let path = dir.parent().unwrap().join("state.json");
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    state["checked_ms"] = json!(0);
+    std::fs::write(path, serde_json::to_vec(&state).unwrap()).unwrap();
 }
 
 #[tokio::test]
 async fn deadline_keeps_runtime_responsive_and_never_runs_a_late_command() {
     let fixture = Fixture::new(COMMAND);
     let gate = Gate::hold(&fixture.cached);
-    let request = json!({"index":"docs", "command_id":"search", "query":"x", "refresh_wait_ms":60});
+    let request = json!({"index":"docs", "command_id":"search", "query":"x", "freshness":"require_fresh", "refresh_wait_ms":60});
     let start = Instant::now();
     let (result, heartbeat) = tokio::join!(fixture.search(request.clone()), async {
         tokio::time::sleep(Duration::from_millis(10)).await;
         start.elapsed()
     });
-    assert_pending(&result.unwrap_err());
+    assert_pending(&result.unwrap());
     assert!(start.elapsed() < Duration::from_millis(500));
     assert!(
         heartbeat < Duration::from_millis(100),
         "async runtime was blocked: {heartbeat:?}"
     );
-    assert_pending(&fixture.search(request).await.unwrap_err());
+    assert_pending(&fixture.search(request).await.unwrap());
     drop(gate);
     fixture.finish_refresh(&fixture.origin).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -153,19 +166,23 @@ async fn deadline_keeps_runtime_responsive_and_never_runs_a_late_command() {
         .search(json!({"index":"docs", "command_id":"search", "query":"x"}))
         .await
         .unwrap();
-    assert!(fixture.cached.join("marker/.git").exists());
+    assert!(
+        !fixture.cached.join("marker/.git").exists(),
+        "command modified the published snapshot"
+    );
 }
 
 #[tokio::test]
 async fn failed_refresh_does_not_silently_search_cached_metadata() {
     let fixture = Fixture::new(COMMAND);
-    std::fs::remove_file(fixture.cached.join(".pinakes-fetched")).unwrap();
+    expire(&fixture.cached);
     std::fs::rename(&fixture.remote, fixture.remote.with_file_name("offline")).unwrap();
     let error = fixture
-        .search(json!({"index":"docs", "query":"Search"}))
+        .search(json!({"index":"docs", "query":"Search", "freshness":"require_fresh"}))
         .await
-        .unwrap_err();
-    assert_eq!(error.data.unwrap()["status"], "refresh_failed");
+        .unwrap();
+    assert_eq!(error.is_error, Some(true));
+    assert_eq!(error.structured_content.unwrap()["status"], "failed");
     assert!(!fixture.cached.join("marker").exists());
 }
 
@@ -181,18 +198,18 @@ async fn referenced_command_and_deep_doc_repositories_share_the_deadline() {
     let cached = fixture.server.inner.cache.ensure(&origin).unwrap();
     let gate = Gate::hold(&cached);
     let command = fixture
-        .search(json!({"index":"docs", "command_id":"search", "query":"x", "refresh_wait_ms":60}))
+        .search(json!({"index":"docs", "command_id":"search", "query":"x", "freshness":"require_fresh", "refresh_wait_ms":60}))
         .await
-        .unwrap_err();
+        .unwrap();
     assert_pending(&command);
     // An unavailable content repository is not reported as a successful empty deep search.
     let deep = fixture
-        .search(json!({"index":"docs", "deep":true, "query":"needle", "refresh_wait_ms":60}))
+        .search(json!({"index":"docs", "deep":true, "query":"needle", "freshness":"require_fresh", "refresh_wait_ms":60}))
         .await
-        .unwrap_err();
+        .unwrap();
     assert_pending(&deep);
     fixture
-        .search(json!({"index":"docs", "query":"Doc", "refresh_wait_ms":60}))
+        .search(json!({"index":"docs", "query":"Doc", "freshness":"require_fresh", "refresh_wait_ms":60}))
         .await
         .unwrap();
     drop(gate);
@@ -225,9 +242,9 @@ async fn refresh_budget_is_not_restarted_for_a_second_repository() {
     });
     let start = Instant::now();
     let error = fixture
-        .search(json!({"index":"docs", "deep":true, "query":"needle", "refresh_wait_ms":250}))
+        .search(json!({"index":"docs", "deep":true, "query":"needle", "freshness":"require_fresh", "refresh_wait_ms":250}))
         .await
-        .unwrap_err();
+        .unwrap();
     assert_pending(&error);
     assert!(
         start.elapsed() < Duration::from_millis(375),
@@ -244,7 +261,7 @@ async fn refresh_wait_bounds_are_validated() {
     let fixture = Fixture::new(COMMAND);
     for wait in [0, 30_001] {
         let error = fixture
-            .search(json!({"index":"docs", "query":"x", "refresh_wait_ms":wait}))
+            .search(json!({"index":"docs", "query":"x", "freshness":"require_fresh", "refresh_wait_ms":wait}))
             .await
             .unwrap_err();
         assert!(error.message.contains("between 1 and 30000"));
@@ -286,12 +303,12 @@ async fn never_and_pinned_indexes_do_not_wait_for_an_unnecessary_refresh() {
         ]),
     };
     let server = AIexandriaServer::new(registry, (*fixture.server.inner.cache).clone());
-    std::fs::remove_file(fixture.cached.join(".pinakes-fetched")).unwrap();
-    std::fs::remove_file(pinned_cache.join(".pinakes-fetched")).unwrap();
+    expire(&fixture.cached);
+    expire(&pinned_cache);
     std::fs::rename(&fixture.remote, fixture.remote.with_file_name("offline")).unwrap();
     for name in ["never", "pinned"] {
         let request = Parameters(
-            serde_json::from_value(json!({"index":name, "query":"Search", "refresh_wait_ms":100}))
+            serde_json::from_value(json!({"index":name, "query":"Search", "freshness":"require_fresh", "refresh_wait_ms":100}))
                 .unwrap(),
         );
         server.search_docs(request).await.unwrap();
@@ -301,12 +318,16 @@ async fn never_and_pinned_indexes_do_not_wait_for_an_unnecessary_refresh() {
 #[cfg(unix)]
 #[tokio::test]
 async fn command_execution_has_its_own_timeout_after_preparation() {
-    let fixture = Fixture::new("version: 1\nname: Root\ncommand_policy: {allow: '^sh -c .+$', timeout_secs: 1}\nentries:\n - {id: slow, name: Slow, kind: command, argv: [sh, -c, 'sleep 0.15; printf finished']}\n");
+    let fixture = Fixture::new("version: 1\nname: Root\ncommand_policy: {allow: '^sh -c .+$', timeout_secs: 4}\nentries:\n - {id: slow, name: Slow, kind: command, argv: [sh, -c, 'sleep 1.1; printf finished']}\n");
     let start = Instant::now();
     let result = fixture
-        .search(json!({"index":"docs", "command_id":"slow", "query":"x", "refresh_wait_ms":100}))
+        .search(json!({"index":"docs", "command_id":"slow", "query":"x", "refresh_wait_ms":1000}))
         .await
         .unwrap();
-    assert!(start.elapsed() > Duration::from_millis(150));
+    assert_eq!(
+        result.structured_content.as_ref().unwrap()["status"],
+        "ready"
+    );
+    assert!(start.elapsed() > Duration::from_millis(1100));
     assert!(serde_json::to_string(&result).unwrap().contains("finished"));
 }

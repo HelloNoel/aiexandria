@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 
 pub const SUPPORTED_VERSION: u32 = 1;
+pub const SUPPORTED_DRAFT_REVISION: &str = "2026-10-30";
 
 /// A reference to a git repository at a particular ref. Index files use this both
 /// when they live in another repo and when their entries point at content in another repo.
@@ -32,6 +33,7 @@ pub struct GitRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
 
+    /// SHA-1/SHA-256 commit ID or unambiguous prefix; checked against the repository format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
 
@@ -102,11 +104,11 @@ impl GitRef {
             )));
         }
         if let Some(commit) = &self.commit {
-            if !(7..=40).contains(&commit.len())
+            if !(7..=64).contains(&commit.len())
                 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit())
             {
                 return Err(crate::error::AIexError::Other(format!(
-                    "git commit for '{}' must be a 7-40 character hexadecimal SHA",
+                    "git commit for '{}' must be a 7-64 character hexadecimal commit ID",
                     self.url
                 )));
             }
@@ -520,7 +522,7 @@ entries:
         assert!(Index::parse(invalid_commit, "test")
             .unwrap_err()
             .to_string()
-            .contains("hexadecimal SHA"));
+            .contains("hexadecimal commit ID"));
 
         let merge = r#"
 version: 1

@@ -10,10 +10,12 @@ pub mod command;
 pub mod discovery;
 pub mod error;
 pub mod generate;
+pub mod git_cli;
 pub mod index;
 pub mod registry;
 pub mod resolver;
 pub mod server;
+pub mod update;
 
 pub use error::{AIexError, Result};
 

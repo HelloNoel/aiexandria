@@ -117,4 +117,6 @@ git checkout v0.3.0
 cargo install --path . --locked
 ~~~
 
-This installs to Cargo's bin directory. A downloaded binary needs no Git CLI. Ripgrep is only needed for indexes whose optional commands invoke it.
+This installs to Cargo's bin directory. A published v0.3.0 binary needs no Git CLI. Development builds require Git 2.43.7 or newer on the MCP process’s PATH (or set --git / AIEXANDRIA_GIT). Ripgrep is only needed for indexes whose optional commands invoke it.
+
+Development builds require Rust 1.89 or newer. Release binaries no longer link libgit2; development tests still use git2 fixtures and their native build dependencies.

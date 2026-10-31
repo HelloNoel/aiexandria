@@ -1,6 +1,7 @@
 version: 1
 name: AIexandria
-description: AIexandria v0.3.0 installation, public defaults, custom registries, source discovery, and troubleshooting.
+description: >
+  AIexandria development guide: installation, public defaults, custom registries, source discovery, and troubleshooting.
 entries:
   - id: getting-started
     name: Getting started
@@ -29,7 +30,7 @@ entries:
     path: docs/writing-indexes.md
   - id: configuration
     name: Configuration and troubleshooting
-    description: Registry precedence, authentication, cache paths, refresh, and SHA-256 limitations.
+    description: Registry precedence, authentication, cache paths, refresh, and SHA-256 support.
     kind: doc
     path: docs/configuration.md
   - id: reference
@@ -37,3 +38,8 @@ entries:
     description: CLI options, environment variables, and seven MCP tools.
     kind: doc
     path: docs/reference.md
+  - id: updating
+    name: Prepare and update repositories
+    description: Prewarm sources, share refresh jobs, schedule updates with cron, systemd or launchd.
+    kind: doc
+    path: docs/updating.md

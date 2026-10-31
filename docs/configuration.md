@@ -1,5 +1,7 @@
 # Configuration and troubleshooting
 
+This page describes the next release. Published v0.3.0 uses the previous Git backend.
+
 ## Registry selection
 
 AIexandria uses the first applicable registry:
@@ -29,8 +31,7 @@ or choose a file with --auth / AIEXANDRIA_AUTH. Ensure the MCP client passes the
 variable to the server. A repository's token_env can override the host mapping.
 Never commit tokens.
 
-SSH repositories use your SSH agent. Load the key for the intended account. Git
-access uses libgit2; command-line Git may have a different authentication setup.
+Git CLI handles repository access. SSH uses the identity selected by your SSH configuration. HTTPS uses a repository's explicit token, then the central host mapping, then normal Git credential helpers. Missing explicit credentials remain errors even when content is cached. Prompts are disabled; scheduled jobs need noninteractive credentials. AIexandria does not change global Git configuration.
 
 ## Cache and refresh
 
@@ -59,22 +60,22 @@ Restart the client after configuration changes or replacing the executable.
 **Discovery incomplete:** retry after catalog acquisition finishes. Check reported
 failures before interpreting an empty response as absence of documentation.
 
-**Search returns refresh_pending:** cloning or refresh exceeded its preparation
-deadline. Work continues in the background. Retry after the indicated delay, or
-set refresh_wait_ms up to 30000. A refresh_failed error means acquisition failed;
-check connectivity, refs, and credentials. Command execution has a separate timeout.
-Read tools have their own acquisition behavior and can use cached content after
-refresh failures; do not assume every read fetched the latest text.
+**Search returns preparing:** the requested content is not ready yet. This is a normal tool response; no search ran. Retry after the suggested delay a bounded number of times, or prewarm the source with [aiexandria update](updating.md). Cached searches return available content while due refreshes run in the background. Use freshness=require_fresh only when a fresh scheduled check matters. refresh_wait_ms accepts 1–30000 milliseconds (default 5000); command execution has a separate timeout.
+
+Failed acquisitions return explicit tool errors. Cached content remains usable after a refresh failure, with freshness metadata. Pending preparation is not an empty search.
 
 **Search finds nothing:** built-in search uses a case-insensitive substring, not
 Boolean expressions. Select the right source, try a distinctive term, and enable
 deep: true to search listed current-level documents. Commands can use other query
 languages; follow their descriptions.
 
-**SHA-256 repository fails:** this release's libgit2 dependency does not support
-SHA-256 Git repositories. Use a SHA-1 source for now. Native support remains
-planned when supported Rust bindings become available. Pinakes v1 commit pins
-use SHA-1 IDs (7–40 hexadecimal characters).
+**Git missing or too old:** install Git 2.43.7 or newer and make it available on the MCP process's PATH, or set --git /absolute/path/to/git / AIEXANDRIA_GIT. A GUI client's PATH may differ from your terminal's.
+
+**SHA-256 repository fails:** use the development build with Git 2.43.7 or newer; releases through v0.3.0 do not support these repositories. Use the full 64-character SHA-256 commit ID or an unambiguous hexadecimal prefix of at least seven characters. SHA-1 IDs remain 40 characters, with the same minimum prefix length. A pin must identify a commit in that repository; branches or tags with hexadecimal names do not override it. Prefer full IDs when sharing indexes.
 
 Set RUST_LOG=aiexandria=debug for diagnostic logs on stderr. Review logs for
 private repository information before sharing them.
+
+Explicit document and index paths use selective checkout and partial clone when supported by the server. Required submodules and command searches receive complete checkouts. Hooks and checkout filters, including Git LFS smudging, are disabled; LFS pointers are not expanded. Commands run in temporary copies so writes cannot corrupt shared snapshots.
+
+The new cache layout preserves older caches for rollback. Current and previous snapshots, active reads, and unexpired follow-up tokens are retained; older unused generations are cleaned during publication. Do not edit cache checkouts by hand. See [repository updates](updating.md) for prewarming and scheduling.

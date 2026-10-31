@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Use the Git CLI (2.43.7 or newer) for repository access; support SHA-1 and SHA-256 branches, tags, and commit pins.
+- Resolve commit pins as object IDs, reject non-commit objects, and retain resolved pins during forced updates and selective hydration. See the [Pinakes changelog](https://github.com/HelloNoel/pinakes/blob/main/CHANGELOG.md) for format compatibility.
+- Keep cached searches and reads available while refreshes run in the background. Return normal preparing responses for cold acquisitions and snapshot tokens for consistent follow-up reads.
+- Add aiexandria update with shared process locks, bounded acquisition concurrency, interactive priority, and manual/scheduled prewarming.
+- Fetch and materialize explicit document paths selectively. Preserve full command/submodule checkouts and run commands in independent copies.
+
+
 ## 0.3.0 — 2026-10-29
 
 - Add global metadata discovery with bounded results and explicit coverage status.

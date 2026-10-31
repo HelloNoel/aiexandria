@@ -13,7 +13,7 @@ pub enum AIexError {
     },
 
     #[error("git error: {0}")]
-    Git(#[from] git2::Error),
+    Git(String),
 
     #[error("invalid url {url}: {message}")]
     InvalidUrl { url: String, message: String },

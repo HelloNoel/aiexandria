@@ -17,6 +17,6 @@ Discovery searches metadata, not every document. The starter collection includes
 
 See [adding documentation](docs/adding-documentation.md), [configuration](docs/configuration.md), and [writing indexes](docs/writing-indexes.md). Referenced repositories are read-access boundaries; listed documents curate navigation rather than restricting individual files. Custom commands run with the server's permissions and require trusted authors or your own OS isolation.
 
-AIexandria implements [Pinakes](https://github.com/HelloNoel/pinakes). See [CONTRIBUTING.md](CONTRIBUTING.md) for development. Native SHA-256 repository support remains planned.
+AIexandria implements [Pinakes](https://github.com/HelloNoel/pinakes). See [CONTRIBUTING.md](CONTRIBUTING.md) for development. Development builds use Git 2.43.7 or newer, support SHA-1 and SHA-256 repositories (including commit pins), and keep cached searches available during refresh. See [repository updates](docs/updating.md) for prewarming and scheduling.
 
 Licensed under [Apache-2.0](LICENSE).

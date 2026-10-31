@@ -266,7 +266,13 @@ impl Catalog {
     fn build(&self, name: &str) {
         let root = &self.inner.registry.indexes[name];
         let budget = TraversalBudget::new(32, MAX_INDEX_LOADS);
-        let resolver = Resolver::with_budget(&self.inner.cache, &budget);
+        // Catalog builders may wait in the background while callers retain the
+        // previous catalog. Use one revision per repository for this traversal.
+        let cache = self
+            .inner
+            .cache
+            .background_session(Instant::now() + BUILD_BUDGET);
+        let resolver = Resolver::with_budget(&cache, &budget);
         let context = format!("{} {}", name, root.description.as_deref().unwrap_or(""));
         let mut tasks = VecDeque::from([Task {
             parent: None,

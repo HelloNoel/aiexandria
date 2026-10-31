@@ -68,7 +68,6 @@ impl TraversalBudget {
 pub struct Resolver<'a> {
     pub cache: &'a RepoCache,
     budget: Option<&'a TraversalBudget>,
-    fresh_deadline: Option<std::time::Instant>,
 }
 
 impl<'a> Resolver<'a> {
@@ -76,7 +75,6 @@ impl<'a> Resolver<'a> {
         Self {
             cache,
             budget: Some(budget),
-            fresh_deadline: None,
         }
     }
 
@@ -84,15 +82,6 @@ impl<'a> Resolver<'a> {
         Self {
             cache,
             budget: None,
-            fresh_deadline: None,
-        }
-    }
-
-    pub(crate) fn with_deadline(cache: &'a RepoCache, deadline: std::time::Instant) -> Self {
-        Self {
-            cache,
-            budget: None,
-            fresh_deadline: Some(deadline),
         }
     }
 
@@ -101,13 +90,7 @@ impl<'a> Resolver<'a> {
         origin: &GitRef,
         refresh: RefreshPolicy,
     ) -> Result<(PathBuf, bool)> {
-        match self.fresh_deadline {
-            Some(deadline) => self
-                .cache
-                .ensure_fresh_until(origin, refresh, deadline)
-                .map(|dir| (dir, false)),
-            None => self.cache.ensure_with_status(origin, refresh),
-        }
+        self.cache.ensure_with_status(origin, refresh)
     }
 
     /// Load an index file from a repo + path, with merge entries flattened in-place.
@@ -155,11 +138,16 @@ impl<'a> Resolver<'a> {
         if let Some(budget) = self.budget {
             budget.visit(visited.len())?;
         }
-        let (repo_dir, stale) = self.ensure(origin, refresh)?;
+        let (repo_dir, stale) = self.cache.ensure_path(origin, refresh, rel_path)?;
         if let Some(budget) = self.budget {
             budget.stale.set(budget.stale.get() || stale);
         }
-        let key = repo_dir.join(rel_path).canonicalize()?;
+        let canonical = repo_dir.join(rel_path).canonicalize()?;
+        let key = self.cache.path_for(origin).join(
+            canonical
+                .strip_prefix(repo_dir.canonicalize()?)
+                .map_err(|_| AIexError::Other("index path escapes repository".into()))?,
+        );
         if !visited.insert(key.clone()) {
             return Err(AIexError::MergeCycle {
                 repo: origin.url.clone(),
@@ -234,7 +222,7 @@ impl<'a> Resolver<'a> {
     pub fn read_doc(&self, entry: &ResolvedEntry) -> Result<String> {
         match &entry.entry.kind {
             EntryKind::Doc { path, .. } => {
-                let (dir, _) = self.ensure(&entry.origin, entry.refresh)?;
+                let (dir, _) = self.cache.ensure_path(&entry.origin, entry.refresh, path)?;
                 self.cache.read_file(&dir, path)
             }
             _ => Err(AIexError::Other("not a doc entry".into())),

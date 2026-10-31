@@ -93,12 +93,22 @@ impl Fixture {
     }
 
     async fn query(&self, request: Value) -> Value {
-        let body = self
-            .service
-            .discover(serde_json::from_value(request).unwrap())
-            .await
-            .unwrap();
-        serde_json::from_str(&body).unwrap()
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let body = self
+                .service
+                .discover(serde_json::from_value(request.clone()).unwrap())
+                .await
+                .unwrap();
+            let value: Value = serde_json::from_str(&body).unwrap();
+            if request.get("cursor").is_some()
+                || value["catalog"]["pending_indexes"] == 0
+                || Instant::now() >= deadline
+            {
+                return value;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 }
 

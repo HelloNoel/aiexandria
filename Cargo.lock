@@ -23,6 +23,7 @@ dependencies = [
  "hex",
  "humantime",
  "humantime-serde",
+ "libc",
  "percent-encoding",
  "process-wrap",
  "regex",

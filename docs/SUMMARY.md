@@ -9,3 +9,5 @@
 - [Write useful indexes](writing-indexes.md)
 - [Configuration and troubleshooting](configuration.md)
 - [Reference](reference.md)
+
+- [Prepare and update repositories](updating.md)

@@ -1,57 +1,25 @@
-# AIexandria v0.3.0
+# AIexandria — next release (draft)
 
-AIexandria now starts with a public documentation collection and can discover
-relevant sources across your configured indexes. The project has moved to GitHub.
+Searches and reads now stay usable while repositories refresh. This release also adds manual and scheduled updates, selective downloads, and support for SHA-256 repositories through Git CLI.
 
 ## Highlights
 
-- **Useful defaults:** 20 programming, framework, tooling, and infrastructure
-  topics, plus help matched to the installed release. Existing custom registries
-  remain authoritative; add the public collection explicitly if desired.
-- **Source discovery:** select sources through bounded metadata results before
-  searching and reading. Different sources can keep their own search implementations.
-- **Search refresh deadlines:** one configurable preparation deadline, with
-  explicit pending/failed status and background acquisition shared across retries.
-- **User guides:** installation, MCP clients, adding documentation, index authoring,
-  and troubleshooting, with a separate implementer-focused Pinakes specification.
-- **GitHub migration:** preserved histories converted from SHA-256 to SHA-1 and
-  signed anew. Native SHA-256 support remains pending upstream Rust/libgit2 support.
+- **Search during refresh:** return a complete cached snapshot immediately while a due refresh runs in the background. Missing content returns a normal preparing response with a retry delay.
+- **Prepare ahead of time:** aiexandria update refreshes metadata and cached sources, or prewarms one search route. Concurrent updaters and MCP requests share repository jobs, and interactive requests can promote queued work.
+- **Consistent evidence:** pass the snapshot token from a search to a follow-up read to keep the same revision. Tokens expire after 15 minutes; current routes and permissions are still checked.
+- **Smaller downloads:** explicit document and index paths use partial clone and selective checkout where supported. Commands and required submodules retain complete checkouts. Commands use prepared independent copies.
+- **SHA-256 repositories and pins:** the Git CLI replaces libgit2 for runtime repository access. Full commit IDs and unambiguous prefixes work for both SHA-1 and SHA-256. Resolved pins stay fixed during forced updates and selective downloads.
 
-Discovery is available starting in v0.3.0. It ranks metadata, not document contents.
-Deep search covers listed documents at the selected level. Content-search output
-has no shared byte budget; use focused queries and bounded read excerpts.
+## Upgrade
 
-## Install
+Install Git 2.43.7 or newer before installing this build. Ensure Git is on the MCP client's PATH, or select it with --git / AIEXANDRIA_GIT. Repository operations use normal Git HTTPS/SSH configuration, with explicit AIexandria credentials taking precedence. Prompts, hooks, and checkout filters are disabled.
 
-Download your archive, extract it, and put aiexandria on your PATH.
-
-| Platform | Asset |
-| --- | --- |
-| macOS Apple Silicon | aiexandria-v0.3.0-aarch64-apple-darwin.tar.gz |
-| macOS Intel | aiexandria-v0.3.0-x86_64-apple-darwin.tar.gz |
-| Linux ARM64 | aiexandria-v0.3.0-aarch64-unknown-linux-gnu.tar.gz |
-| Linux x86-64 | aiexandria-v0.3.0-x86_64-unknown-linux-gnu.tar.gz |
-| Windows x86-64 | aiexandria-v0.3.0-x86_64-pc-windows-gnu.zip |
-
-Compare your archive's SHA-256 with its line in SHA256SUMS. If you download all
-archives, run shasum -a 256 -c SHA256SUMS (or sha256sum -c SHA256SUMS on Linux).
-Linux builds require glibc 2.35 or newer. macOS binaries are unsigned; after
-verifying your download, clear quarantine if needed:
+The new cache layout leaves older caches available for rollback. Prepare frequently used sources before restarting the MCP client:
 
 ~~~sh
-xattr -d com.apple.quarantine aiexandria
+aiexandria update --index YOUR_INDEX --path ENTRY_ID --command-id COMMAND_ID
 ~~~
 
-Or build with a Rust toolchain:
+See the [update guide](docs/updating.md) for command options and cron, systemd, and launchd examples. No daemon or schedule is installed automatically.
 
-~~~sh
-git clone https://github.com/HelloNoel/aiexandria.git
-cd aiexandria
-git checkout v0.3.0
-cargo install --path . --locked
-~~~
-
-## Getting started
-
-See the [getting-started guide](https://hellonoel.github.io/aiexandria/getting-started.html)
-to connect your MCP client and read a document from the default collection.
+Discovery still searches metadata; deep search covers listed documents at the selected level. Custom commands retain their own query syntax and output format. Windows runtime validation and final version/asset naming must be reviewed before publishing this draft.

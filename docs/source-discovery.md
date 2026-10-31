@@ -48,10 +48,9 @@ catalog.complete, pending/failed/stale counts, and retry suggestions. Follow
 next_cursor only when more results would help; omit query, indexes, and kinds when using a cursor.
 Cursors are temporary, not permanent bookmarks.
 
-Search waits up to five seconds for route resolution and required repository
-acquisition. refresh_pending means preparation continues; retry after the indicated
-delay. refresh_failed means acquisition failed. Set refresh_wait_ms between 1 and
-30000 to change the wait. Command execution uses a separate timeout.
+In the next release, searches use cached snapshots while due refreshes run in the background. Cold acquisition waits up to five seconds by default. status=preparing means no search ran: wait for retry_after_ms, retry a bounded number of times, or prepare the source with [aiexandria update](updating.md). Failed acquisitions are explicit tool errors. Avoid one-second retry loops.
+
+Use freshness=require_fresh only when a fresh scheduled check is needed. refresh_wait_ms accepts 1–30000 milliseconds. Command execution has a separate timeout. Pass the returned snapshot token to follow-up reads to read the same revision, and use offset/limit to keep evidence small. Tokens expire after 15 minutes.
 
 Discovery limits do not bound content-search output. Keep queries focused and
 read excerpts instead of whole files. Empty or partial results do not prove that

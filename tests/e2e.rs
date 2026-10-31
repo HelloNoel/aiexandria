@@ -377,6 +377,11 @@ fn refresh_policy_pulls_new_commits() {
 
     std::thread::sleep(std::time::Duration::from_millis(80));
 
+    let fresh = cache.session(
+        aiexandria::cache::Freshness::RequireFresh,
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+    );
+    let resolver = Resolver::new(&fresh);
     let root2 = resolver
         .load_index(&git_ref, "pinakes.yaml", &CommandPolicyChain::default())
         .unwrap();

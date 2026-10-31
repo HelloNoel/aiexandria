@@ -506,5 +506,401 @@
         }
       }
     }
+  },
+  {
+    "name": "index commit length 6 (schema syntax only)",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "Pinned docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAA"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "index commit length 7 (schema syntax only)",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "Pinned docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAA"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "index commit length 39 (schema syntax only)",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "Pinned docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "index commit length 40 (schema syntax only)",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "Pinned docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "index commit length 41 (schema syntax only)",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "Pinned docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "index commit length 63 (schema syntax only)",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "Pinned docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "index commit length 64 (schema syntax only)",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "Pinned docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "index commit length 65 (schema syntax only)",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "Pinned docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "index commit nonhex (schema syntax only)",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "Pinned docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaag"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "index commit revision expression (schema syntax only)",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "Pinned docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "HEAD~1"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "index commit peeling expression (schema syntax only)",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "Pinned docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "registry commit length 6 (schema syntax only)",
+    "valid": false,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAA"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "registry commit length 7 (schema syntax only)",
+    "valid": true,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAA"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "registry commit length 39 (schema syntax only)",
+    "valid": true,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "registry commit length 40 (schema syntax only)",
+    "valid": true,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "registry commit length 41 (schema syntax only)",
+    "valid": true,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "registry commit length 63 (schema syntax only)",
+    "valid": true,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "registry commit length 64 (schema syntax only)",
+    "valid": true,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "registry commit length 65 (schema syntax only)",
+    "valid": false,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "registry commit nonhex (schema syntax only)",
+    "valid": false,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaag"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "registry commit revision expression (schema syntax only)",
+    "valid": false,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "HEAD~1"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "registry commit peeling expression (schema syntax only)",
+    "valid": false,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
   }
 ]
