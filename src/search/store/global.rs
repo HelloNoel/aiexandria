@@ -144,11 +144,11 @@ impl Store {
                     ));
                 }
                 let score: f64 = bytes
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .zip(vector)
-                    .map(|(b, q)| {
-                        f64::from(f32::from_le_bytes(b.try_into().unwrap())) * f64::from(*q)
-                    })
+                    .map(|(b, q)| f64::from(f32::from_le_bytes(*b)) * f64::from(*q))
                     .sum();
                 if !score.is_finite() {
                     return Err(AIexError::Other("invalid cached embedding".into()));

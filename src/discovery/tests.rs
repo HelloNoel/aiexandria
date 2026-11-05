@@ -93,7 +93,9 @@ impl Fixture {
     }
 
     async fn query(&self, request: Value) -> Value {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Fixture acquisition can take longer on Windows runners. Request
+        // latency is bounded separately by the service's foreground wait.
+        let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             let body = self
                 .service
@@ -101,10 +103,10 @@ impl Fixture {
                 .await
                 .unwrap();
             let value: Value = serde_json::from_str(&body).unwrap();
-            if request.get("cursor").is_some()
-                || value["catalog"]["pending_indexes"] == 0
-                || Instant::now() >= deadline
-            {
+            let settled = value["catalog"]["pending_indexes"] == 0
+                && (value["catalog"]["stale_indexes"] == 0
+                    || value["catalog"]["failed_nodes"].as_u64().unwrap_or(0) > 0);
+            if request.get("cursor").is_some() || settled || Instant::now() >= deadline {
                 return value;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -192,7 +194,7 @@ async fn cycles_and_failed_roots_preserve_healthy_results() {
     let root = "version: 1\nname: Healthy\nentries:\n  - {id: loop, name: Loop, kind: index, path: pinakes.yaml}\n";
     let fixture = Fixture::new(&[("pinakes.yaml", root)], true, RefreshSetting::Never);
     let response = fixture.query(json!({"query":"Healthy"})).await;
-    assert_eq!(response["sources"][0]["name"], "Healthy");
+    assert_eq!(response["sources"][0]["name"], "Healthy", "{response}");
     assert_eq!(response["catalog"]["complete"], false);
     assert_eq!(response["catalog"]["failed_nodes"], 2);
     assert_eq!(response["catalog"]["stale_indexes"], 0);
@@ -212,10 +214,10 @@ async fn refresh_removes_sources_but_cursor_keeps_its_snapshot() {
         ],
         false,
         // Allow the initial selective checkout to finish before the first refresh.
-        RefreshSetting::Every(Duration::from_secs(1)),
+        RefreshSetting::Every(Duration::from_secs(5)),
     );
     let first = fixture.query(json!({"query":"Topic", "limit":1})).await;
-    assert_eq!(first["catalog"]["complete"], true);
+    assert_eq!(first["catalog"]["complete"], true, "{first}");
     let cursor = first["next_cursor"].as_str().unwrap().to_owned();
     let root_id = first["sources"][0]["source_id"].clone();
     let dir = fixture.repo.workdir().unwrap();
@@ -225,7 +227,7 @@ async fn refresh_removes_sources_but_cursor_keeps_its_snapshot() {
         "version: 1\nname: Topic\nentries: []\n",
     );
     commit(&fixture.repo);
-    tokio::time::sleep(Duration::from_millis(1100)).await;
+    tokio::time::sleep(Duration::from_millis(5100)).await;
     let updated = fixture.query(json!({"query":"Topic"})).await;
     assert_eq!(updated["catalog"]["complete"], true, "{updated}");
     assert_eq!(updated["sources"].as_array().unwrap().len(), 1);
@@ -253,12 +255,13 @@ async fn never_refresh_and_failed_refresh_status() {
     let fixture = Fixture::new(
         &[("pinakes.yaml", LINUX)],
         false,
-        RefreshSetting::Every(Duration::from_millis(100)),
+        RefreshSetting::Every(Duration::from_secs(2)),
     );
-    fixture.query(json!({"query":"Linux"})).await;
+    let initial = fixture.query(json!({"query":"Linux"})).await;
+    assert_eq!(initial["catalog"]["complete"], true, "{initial}");
     write(fixture.repo.workdir().unwrap(), "pinakes.yaml", "invalid");
     commit(&fixture.repo);
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(2100)).await;
     let failed = fixture.query(json!({"query":"Linux"})).await;
     assert_eq!(failed["sources"][0]["name"], "Linux");
     assert_eq!(failed["catalog"]["complete"], false);
@@ -271,14 +274,15 @@ async fn failed_fetch_reports_stale_cached_metadata() {
     let fixture = Fixture::new(
         &[("pinakes.yaml", LINUX)],
         false,
-        RefreshSetting::Every(Duration::from_millis(100)),
+        RefreshSetting::Every(Duration::from_secs(2)),
     );
-    fixture.query(json!({"query":"Linux"})).await;
+    let initial = fixture.query(json!({"query":"Linux"})).await;
+    assert_eq!(initial["catalog"]["complete"], true, "{initial}");
     let dir = fixture.repo.workdir().unwrap();
     std::fs::rename(dir, dir.with_file_name("offline")).unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(2100)).await;
     let response = fixture.query(json!({"query":"Linux"})).await;
-    assert_eq!(response["sources"][0]["name"], "Linux");
+    assert_eq!(response["sources"][0]["name"], "Linux", "{response}");
     assert_eq!(response["catalog"]["complete"], false);
     assert_eq!(response["catalog"]["stale_indexes"], 1);
     assert_eq!(response["retry_after_ms"], 30_000);

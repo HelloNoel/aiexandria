@@ -101,6 +101,64 @@ impl Fixture {
     }
 }
 #[test]
+fn canonical_cache_paths_support_spaces() {
+    let mut f = Fixture::new("sha1", true);
+    let root = f.temp.path().join("cache documents");
+    std::fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    f.cache = RepoCache::new(root.clone(), AuthConfig::default());
+    let dir = f
+        .request()
+        .ensure_path(&f.origin, RefreshPolicy::Never, "doc.md")
+        .unwrap()
+        .0;
+    assert!(dir.starts_with(&root));
+    assert_eq!(f.cache.read_file(&dir, "doc.md").unwrap(), "old evidence\n");
+    f.change();
+    let updated = f.force();
+    assert_eq!(
+        f.cache.read_file(&updated, "doc.md").unwrap(),
+        "new evidence\n"
+    );
+    assert_eq!(f.cache.read_file(&dir, "doc.md").unwrap(), "old evidence\n");
+}
+
+#[test]
+fn cache_line_endings_do_not_depend_on_global_git_configuration() {
+    let f = Fixture::new("sha1", true);
+    std::fs::write(f.repo.join(".gitattributes"), "*.md text\n").unwrap();
+    git(&f.repo, &["add", ".gitattributes"]);
+    git(&f.repo, &["commit", "-m", "text attributes"]);
+    let config = f.temp.path().join("gitconfig");
+    std::fs::write(&config, "[core]\n\tautocrlf = true\n\teol = crlf\n").unwrap();
+    let registry = f.temp.path().join("registry.yaml");
+    std::fs::write(&registry, format!("indexes:\n  docs:\n    repo: {{url: '{}', branch: main, submodules: false}}\n    path: pinakes.yaml\n    refresh: never\n", f.origin.url)).unwrap();
+    let auth = f.temp.path().join("auth.yaml");
+    std::fs::write(&auth, "hosts: {}\n").unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_aiexandria"))
+        .arg("--registry")
+        .arg(&registry)
+        .arg("--auth")
+        .arg(&auth)
+        .arg("--cache")
+        .arg(f.cache.root())
+        .args(["update", "--all", "--json"])
+        .env("GIT_CONFIG_GLOBAL", &config)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let dir = f
+        .cache
+        .cached_snapshot(&f.origin, RefreshPolicy::Never)
+        .unwrap();
+    assert_eq!(f.cache.read_file(&dir, "doc.md").unwrap(), "old evidence\n");
+}
+
+#[test]
 fn sha256_branches_and_tags() {
     let f = Fixture::new("sha256", true);
     let dir = f

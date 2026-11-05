@@ -16,7 +16,19 @@ fn collection(config: SearchConfig) -> (Fixture, Fixture, SearchService) {
     git(&second.repo, &["add", "."]);
     git(&second.repo, &["commit", "-m", "different evidence"]);
     first.warm();
-    first.cache.ensure(&second.origin).unwrap();
+    first
+        .cache
+        .ensure_fresh_until(
+            &second.origin,
+            RefreshPolicy::Never,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "second repository fixture did not finish: {error}; state={}",
+                serde_json::to_string(&first.cache.state(&second.origin)).unwrap()
+            )
+        });
     let entry = |origin: &GitRef| RegistryEntry {
         repo: origin.clone(),
         path: "pinakes.yaml".into(),

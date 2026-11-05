@@ -13,6 +13,24 @@ use crate::auth::AuthConfig;
 use crate::error::{AIexError, Result};
 use crate::index::GitRef;
 
+/// Git for Windows appends slash-separated paths, which verbatim paths reject.
+/// Keep canonical paths internally, but pass ordinary DOS/UNC paths to Git.
+pub(crate) fn path_arg(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        if let Some(Component::Prefix(prefix)) = path.components().next() {
+            match prefix.kind() {
+                Prefix::VerbatimDisk(_) => return value[4..].into(),
+                Prefix::VerbatimUNC(_, _) => return format!("\\\\{}", &value[8..]),
+                _ => {}
+            }
+        }
+    }
+    value.into_owned()
+}
+
 #[derive(Clone, Debug)]
 pub struct GitCli {
     pub executable: PathBuf,
@@ -128,6 +146,8 @@ impl GitCli {
             if let Some(dir) = dir {
                 cmd.current_dir(dir);
             }
+            #[cfg(windows)]
+            cmd.args(["-c", "core.longpaths=true"]);
             // Never inherit a caller's working-repository identity or injected Git config.
             for key in [
                 "GIT_DIR",
@@ -151,6 +171,10 @@ impl GitCli {
                     &format!("core.hooksPath={}", hooks.path().display()),
                     "-c",
                     "init.templateDir=",
+                    "-c",
+                    "core.autocrlf=false",
+                    "-c",
+                    "core.eol=lf",
                     "-c",
                     "maintenance.auto=false",
                     "-c",
@@ -419,6 +443,20 @@ impl Drop for Worker {
 #[cfg(test)]
 mod tests {
     use super::parse_git_version;
+
+    #[cfg(windows)]
+    #[test]
+    fn git_paths_preserve_drive_and_unc_locations_without_verbatim_prefixes() {
+        for (input, expected) in [
+            (r"\\?\C:\cache docs\snapshot", r"C:\cache docs\snapshot"),
+            (r"\\?\UNC\server\share\cache", r"\\server\share\cache"),
+            (r"C:\cache docs\snapshot", r"C:\cache docs\snapshot"),
+            (r"\\server\share\cache", r"\\server\share\cache"),
+            (r"relative\cache", r"relative\cache"),
+        ] {
+            assert_eq!(super::path_arg(std::path::Path::new(input)), expected);
+        }
+    }
 
     #[test]
     fn parses_upstream_versions_with_vendor_build_labels() {

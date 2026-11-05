@@ -52,7 +52,7 @@ impl RepoCache {
             args.extend([
                 "--".into(),
                 origin.url.clone(),
-                dir.to_string_lossy().into_owned(),
+                crate::git_cli::path_arg(dir),
             ]);
             self.git
                 .run_output(None, &args, Some(origin), &self.auth, None, deadline)?

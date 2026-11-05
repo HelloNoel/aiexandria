@@ -102,7 +102,13 @@ impl Fixture {
         }
     }
     fn warm(&self) {
-        self.cache.ensure(&self.origin).unwrap();
+        self.cache
+            .ensure_fresh_until(
+                &self.origin,
+                RefreshPolicy::Never,
+                Instant::now() + Duration::from_secs(60),
+            )
+            .unwrap();
     }
     fn service(&self, embedding: Option<EmbeddingConfig>) -> SearchService {
         SearchService::new(
@@ -123,7 +129,7 @@ impl Fixture {
                 RefreshPolicy::Never,
                 Selection::all(),
                 Some(crate::cache::now_ms()),
-                Instant::now() + Duration::from_secs(20),
+                Instant::now() + Duration::from_secs(60),
             )
             .unwrap();
     }

@@ -35,6 +35,17 @@ struct Fixture {
     cached: PathBuf,
 }
 
+fn prepare(cache: &RepoCache, origin: &GitRef) -> PathBuf {
+    // Setup is not a request-latency assertion; allow cold Git work on Windows.
+    cache
+        .ensure_fresh_until(
+            origin,
+            cache.default_refresh(),
+            Instant::now() + Duration::from_secs(60),
+        )
+        .unwrap()
+}
+
 impl Fixture {
     fn new(body: &str) -> Self {
         Self::with_files(body, &[])
@@ -50,7 +61,7 @@ impl Fixture {
             temp.path().join("cache"),
             crate::auth::AuthConfig::default(),
         );
-        let cached = cache.ensure(&origin).unwrap();
+        let cached = prepare(&cache, &origin);
         let registry = RegistryConfig {
             indexes: BTreeMap::from([(
                 "docs".into(),
@@ -84,7 +95,7 @@ impl Fixture {
             cache.ensure_fresh_until(
                 &origin,
                 RefreshPolicy::Every(Duration::from_secs(3600)),
-                Instant::now() + Duration::from_secs(2),
+                Instant::now() + Duration::from_secs(60),
             )
         })
         .await
@@ -101,14 +112,13 @@ struct Gate {
 }
 impl Gate {
     fn hold(dir: &Path) -> Self {
-        expire(dir);
-        let lock = crate::cache::lock_file(&dir.parent().unwrap().join("job.lock")).unwrap();
+        let lock = expire(dir);
         let (ready_tx, ready_rx) = mpsc::channel();
         let (release, wait) = mpsc::channel();
         let worker = std::thread::spawn(move || {
-            lock.lock().unwrap();
+            let _lock = lock;
             ready_tx.send(()).unwrap();
-            let _ = wait.recv_timeout(Duration::from_secs(2));
+            let _ = wait.recv_timeout(Duration::from_secs(30));
         });
         ready_rx.recv().unwrap();
         Self {
@@ -136,12 +146,17 @@ fn assert_pending(result: &CallToolResult) {
         2000
     );
 }
-fn expire(dir: &Path) {
+fn expire(dir: &Path) -> std::fs::File {
+    // Publication precedes cleanup. Take ownership before changing state so
+    // the original worker cannot overwrite the fixture's expired timestamp.
+    let lock = crate::cache::lock_file(&dir.parent().unwrap().join("job.lock")).unwrap();
+    lock.lock().unwrap();
     let path = dir.parent().unwrap().join("state.json");
     let mut state: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     state["checked_ms"] = json!(0);
-    std::fs::write(path, serde_json::to_vec(&state).unwrap()).unwrap();
+    crate::cache::atomic_json(&path, &state).unwrap();
+    lock
 }
 
 #[tokio::test]
@@ -205,7 +220,7 @@ async fn referenced_command_and_deep_doc_repositories_share_the_deadline() {
     );
     let body = format!("version: 1\nname: Test\ncommand_policy: {{allow: '^git init -- marker$'}}\nentries:\n - {{id: search, name: Search, kind: command, argv: [git, init, --, marker], repo: {{url: '{}', branch: main}}}}\n - {{id: doc, name: Doc, kind: doc, path: README.md, repo: {{url: '{}', branch: main}}}}\n", origin.url, origin.url);
     let fixture = Fixture::new(&body);
-    let cached = fixture.server.inner.cache.ensure(&origin).unwrap();
+    let cached = prepare(&fixture.server.inner.cache, &origin);
     let gate = Gate::hold(&cached);
     let command = fixture
         .search(json!({"index":"docs", "command_id":"search", "query":"x", "freshness":"require_fresh", "refresh_wait_ms":60}))
@@ -243,7 +258,7 @@ async fn refresh_budget_is_not_restarted_for_a_second_repository() {
     );
     let body = format!("version: 1\nname: Root\nentries:\n - {{id: doc, name: Doc, kind: doc, path: README.md, repo: {{url: '{}', branch: main}}}}\n", origin.url);
     let fixture = Fixture::new(&body);
-    let cached = fixture.server.inner.cache.ensure(&origin).unwrap();
+    let cached = prepare(&fixture.server.inner.cache, &origin);
     let first = Gate::hold(&fixture.cached);
     let second = Gate::hold(&cached);
     let releaser = std::thread::spawn(move || {
@@ -293,7 +308,7 @@ async fn never_and_pinned_indexes_do_not_wait_for_an_unnecessary_refresh() {
         commit: Some(commit),
         ..fixture.origin.clone()
     };
-    let pinned_cache = fixture.server.inner.cache.ensure(&pinned).unwrap();
+    let pinned_cache = prepare(&fixture.server.inner.cache, &pinned);
     let entry = |origin: GitRef, refresh| RegistryEntry {
         repo: origin,
         path: "pinakes.yaml".into(),
@@ -506,7 +521,7 @@ async fn global_mcp_search_filters_and_reads_snapshots_across_repositories() {
         )],
     );
     let cache = (*fixture.server.inner.cache).clone();
-    cache.ensure(&other.origin).unwrap();
+    prepare(&cache, &other.origin);
     let mut registry = (*fixture.server.inner.registry).clone();
     registry
         .indexes

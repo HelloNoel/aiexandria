@@ -30,6 +30,11 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+        if: runner.os != 'Windows'
+      # Git-heavy fixtures contend on Windows; concurrency regressions spawn
+      # their own workers and still run with this harness limit.
+      - run: cargo test --locked -- --test-threads=2
+        if: runner.os == 'Windows'
   docs:
     runs-on: ubuntu-24.04
     steps:
