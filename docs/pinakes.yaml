@@ -1,7 +1,7 @@
 version: 1
-name: AIexandria
+name: AIexandria v0.4.0
 description: >
-  AIexandria development guide: installation, public defaults, custom registries, source discovery, and troubleshooting.
+  AIexandria v0.4.0 user guide: installation, public defaults, custom registries, ranked and global search, repository updates, and troubleshooting.
 entries:
   - id: getting-started
     name: Getting started
@@ -43,3 +43,9 @@ entries:
     description: Prewarm sources, share refresh jobs, schedule updates with cron, systemd or launchd.
     kind: doc
     path: docs/updating.md
+
+  - id: semantic-search
+    name: Semantic search
+    description: Keyword, semantic, hybrid and global passages; local providers, corpus filters, cache coverage and fallback.
+    kind: doc
+    path: docs/semantic-search.md

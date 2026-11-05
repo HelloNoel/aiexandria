@@ -1,16 +1,22 @@
 # Installation and MCP clients
 
+## Prerequisites
+
+Install [Git 2.43.7 or newer](https://git-scm.com/install/), then check `git --version`. Git must be available on the MCP process's PATH; GUI clients may use a different PATH from your terminal. You can select an absolute Git path with `--git` or `AIEXANDRIA_GIT`. This is a new runtime requirement in v0.4.0.
+
+The default setup needs no embedding service, database installation or Git hosting account. Ripgrep is only required by sources whose custom commands invoke it. [Semantic search](semantic-search.md) is optional.
+
 ## Download a binary
 
-Download one archive and SHA256SUMS from the [v0.3.0 release](https://github.com/HelloNoel/aiexandria/releases/tag/v0.3.0).
+Download one archive and SHA256SUMS from the [v0.4.0 release](https://github.com/HelloNoel/aiexandria/releases/tag/v0.4.0).
 
 | Platform | Archive |
 | --- | --- |
-| macOS Apple Silicon | aiexandria-v0.3.0-aarch64-apple-darwin.tar.gz |
-| macOS Intel | aiexandria-v0.3.0-x86_64-apple-darwin.tar.gz |
-| Linux ARM64 | aiexandria-v0.3.0-aarch64-unknown-linux-gnu.tar.gz |
-| Linux x86-64 | aiexandria-v0.3.0-x86_64-unknown-linux-gnu.tar.gz |
-| Windows x86-64 | aiexandria-v0.3.0-x86_64-pc-windows-gnu.zip |
+| macOS Apple Silicon | aiexandria-v0.4.0-aarch64-apple-darwin.tar.gz |
+| macOS Intel | aiexandria-v0.4.0-x86_64-apple-darwin.tar.gz |
+| Linux ARM64 | aiexandria-v0.4.0-aarch64-unknown-linux-gnu.tar.gz |
+| Linux x86-64 | aiexandria-v0.4.0-x86_64-unknown-linux-gnu.tar.gz |
+| Windows x86-64 | aiexandria-v0.4.0-x86_64-pc-windows-gnu.zip |
 
 The word unknown in a Linux filename is part of Rust's target name. GNU Linux builds require glibc; they are not Alpine/musl binaries.
 
@@ -19,8 +25,8 @@ The word unknown in a Linux filename is part of Rust's target name. GNU Linux bu
 Run these commands in your download directory. Substitute x86_64 for aarch64 on Intel Macs:
 
 ~~~sh
-shasum -a 256 aiexandria-v0.3.0-aarch64-apple-darwin.tar.gz
-tar -xzf aiexandria-v0.3.0-aarch64-apple-darwin.tar.gz
+shasum -a 256 aiexandria-v0.4.0-aarch64-apple-darwin.tar.gz
+tar -xzf aiexandria-v0.4.0-aarch64-apple-darwin.tar.gz
 mkdir -p ~/.local/bin
 mv aiexandria ~/.local/bin/
 ~/.local/bin/aiexandria --version
@@ -39,8 +45,8 @@ xattr -d com.apple.quarantine ~/.local/bin/aiexandria
 For x86-64, run the following. Substitute aarch64 for x86_64 on ARM64:
 
 ~~~sh
-sha256sum aiexandria-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf aiexandria-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+sha256sum aiexandria-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf aiexandria-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
 mkdir -p ~/.local/bin
 mv aiexandria ~/.local/bin/
 ~/.local/bin/aiexandria --version
@@ -53,8 +59,8 @@ Compare the checksum with SHA256SUMS. Add ~/.local/bin to PATH or use the execut
 In PowerShell, from your download directory:
 
 ~~~powershell
-Get-FileHash .\aiexandria-v0.3.0-x86_64-pc-windows-gnu.zip -Algorithm SHA256
-Expand-Archive .\aiexandria-v0.3.0-x86_64-pc-windows-gnu.zip -DestinationPath "$env:LOCALAPPDATA\Programs\AIexandria"
+Get-FileHash .\aiexandria-v0.4.0-x86_64-pc-windows-gnu.zip -Algorithm SHA256
+Expand-Archive .\aiexandria-v0.4.0-x86_64-pc-windows-gnu.zip -DestinationPath "$env:LOCALAPPDATA\Programs\AIexandria"
 & "$env:LOCALAPPDATA\Programs\AIexandria\aiexandria.exe" --version
 ~~~
 
@@ -108,15 +114,13 @@ Restart the client after configuration changes or replacing the executable. For 
 
 ## Build from source
 
-Install a Rust toolchain, Git and native C build tools. The vendored OpenSSL build may need Perl and make; Windows builds need a compatible native toolchain.
+Install Rust 1.89 or newer, Git 2.43.7 or newer, and native C build tools for the bundled SQLite and TLS dependencies. Windows GNU builds need a compatible MinGW toolchain.
 
 ~~~sh
 git clone https://github.com/HelloNoel/aiexandria.git
 cd aiexandria
-git checkout v0.3.0
+git checkout v0.4.0
 cargo install --path . --locked
 ~~~
 
-This installs to Cargo's bin directory. A published v0.3.0 binary needs no Git CLI. Development builds require Git 2.43.7 or newer on the MCP process’s PATH (or set --git / AIEXANDRIA_GIT). Ripgrep is only needed for indexes whose optional commands invoke it.
-
-Development builds require Rust 1.89 or newer. Release binaries no longer link libgit2; development tests still use git2 fixtures and their native build dependencies.
+This installs into Cargo's bin directory. Ensure both AIexandria and Git are available to the MCP client. See [CONTRIBUTING.md](https://github.com/HelloNoel/aiexandria/blob/v0.4.0/CONTRIBUTING.md) for development test dependencies.

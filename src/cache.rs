@@ -136,6 +136,7 @@ pub struct RepoCache {
     session: Option<Arc<Mutex<Session>>>,
     background: bool,
     force_since: Option<u64>,
+    cache_only: bool,
 }
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
@@ -187,6 +188,7 @@ impl RepoCache {
             session: None,
             background: false,
             force_since: None,
+            cache_only: false,
         }
     }
     pub fn with_default_refresh(mut self, policy: RefreshPolicy) -> Self {
@@ -207,6 +209,28 @@ impl RepoCache {
     }
     pub fn root(&self) -> &Path {
         &self.root
+    }
+    /// Use only published snapshots. Never fetch, hydrate, or enqueue Git work.
+    pub fn cached_only(&self) -> Self {
+        let mut cache = self.clone();
+        cache.cache_only = true;
+        cache
+    }
+    /// Acquire a lease on the available selection without widening its checkout.
+    pub fn cached_snapshot(&self, origin: &GitRef, policy: RefreshPolicy) -> Result<PathBuf> {
+        self.cached_only()
+            .acquire(origin, policy, Selection::default(), false, None)
+            .map(|(dir, _)| dir)
+    }
+    pub fn snapshot_revision(&self, dir: &Path) -> Result<String> {
+        let head = std::fs::read_to_string(dir.join(".git/HEAD"))?;
+        let head = head.trim();
+        if !matches!(head.len(), 40 | 64) || !head.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(AIexError::Other(
+                "not a published repository snapshot".into(),
+            ));
+        }
+        Ok(head.into())
     }
     pub fn session(&self, freshness: Freshness, deadline: Instant) -> Self {
         let mut cache = self.clone();
@@ -347,6 +371,9 @@ impl RepoCache {
         self.auth
             .resolve(&origin.url, origin.token_env.as_deref())?;
         let base = self.path_for(origin);
+        if self.cache_only && !base.is_dir() {
+            return Err(AIexError::RefreshPending);
+        }
         std::fs::create_dir_all(&base)?;
         let deadline = self
             .deadline
@@ -381,7 +408,7 @@ impl RepoCache {
             if let Some(snapshot) = ready {
                 let stale = due || state.failure.is_some();
                 if !due || revision.is_some() || self.freshness == Freshness::CachedOk {
-                    if due && now_ms() >= state.retry_ms {
+                    if due && !self.cache_only && now_ms() >= state.retry_ms {
                         self.start_job(
                             origin,
                             policy,
@@ -411,6 +438,9 @@ impl RepoCache {
                         return Ok((dir, stale));
                     }
                 }
+            }
+            if self.cache_only {
+                return Err(AIexError::RefreshPending);
             }
             if Instant::now() >= deadline
                 || self.git.cancelled.load(std::sync::atomic::Ordering::SeqCst)
@@ -637,7 +667,16 @@ impl RepoCache {
     }
 }
 fn read_state(base: &Path) -> Option<CacheState> {
-    serde_json::from_slice(&std::fs::read(base.join("state.json")).ok()?).ok()
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(base.join("state.json")).ok()?).ok()?;
+    // Older cache records omitted submodules only when it was true. The new
+    // Pinakes default must not reinterpret those already-acquired repositories.
+    value
+        .get_mut("origin")?
+        .as_object_mut()?
+        .entry("submodules")
+        .or_insert(serde_json::Value::Bool(true));
+    serde_json::from_value(value).ok()
 }
 fn escape_pattern(path: &str) -> String {
     path.chars()

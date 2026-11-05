@@ -1,6 +1,6 @@
 # Prepare and update repositories
 
-This command is part of the next release; it is not available in v0.3.0. Install Git 2.43.7 or newer before running a development build.
+Use `aiexandria update` to prepare documentation before a session or on a schedule. Git 2.43.7 or newer is required.
 
 Searches and reads use complete cached snapshots while due refreshes run in the background. A first visit still needs to download the requested content. Use update before a session to prepare frequently used sources. These examples use the built-in public collection; if you have a custom registry, [add the public-docs entry](adding-documentation.md) first:
 
@@ -10,6 +10,37 @@ aiexandria update --index public-docs --path languages --path nodejs
 ~~~
 
 The first command refreshes configured index metadata and already-cached referenced repositories when due. It does not download every document repository. The second prepares the index chain and selected Node.js documentation from the public collection. Repeat --path for each nested entry ID. For a source with a custom search command, add --command-id with its actual command entry ID; this prepares the complete repository, required submodules, and a command copy without executing the search. Use the same registry, auth, cache and Git options as your MCP server.
+
+## Prepare all sources
+
+For initial setup, prepare the sources you expect to use. To include every referenced repository, even those you have never opened, use `--all`:
+
+~~~sh
+# Prepare the public collection, including uncached documentation.
+aiexandria update --all --index public-docs --wait --timeout 30m
+
+# Prepare every configured registry root and build the search index.
+# Requires ranked search configured, and its embedding provider running if set.
+aiexandria update --all --semantic --wait --timeout 30m
+~~~
+
+`--all` follows nested indexes and respects `--index`, `--path` and `--command-id`. Document sources still download their declared paths selectively. Custom-command sources require full checkouts and any required submodules, but commands are never executed. Search exclusions, file/chunk limits and traversal limits still apply: completion does not mean every file in every remote repository was indexed. Check the report for errors or partial coverage.
+
+This is opt-in because adding a source to an index should not silently turn a scheduled refresh into a large first-time download. Ordinary `update` keeps refreshing metadata and already-cached sources; an explicit `--path` still prepares its subtree. Add `--all` to a schedule only if you want it to acquire newly added sources too. The existing campaign lock, deadlines and concurrency limits apply.
+
+`--all` does not force a remote refresh: add `--force` to check sources immediately regardless of their refresh interval. It does not enable embeddings: add `--semantic` for that. It cannot be combined with `--cached-only`.
+
+`update --all --dry-run --json` reports the requested scope and cached repository count without network access. It cannot enumerate repositories hidden behind uncached metadata or estimate download size.
+
+For regular updates after preparation, use:
+
+~~~sh
+aiexandria update --semantic --wait --timeout 30m
+~~~
+
+Omit `--semantic` if ranked search is disabled. Unchanged passages reuse their existing embeddings.
+
+## Refresh and coordinate updates
 
 ~~~sh
 # Check selected mutable refs now, including those configured with refresh: never.
@@ -78,3 +109,9 @@ On macOS, a launchd agent can use this plist at ~/Library/LaunchAgents/org.aiexa
 ~~~
 
 After editing the paths, load it with launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.aiexandria.update.plist. Review its logs after the first run. Windows Task Scheduler can invoke the same update command using your account and explicit executable paths.
+
+## Index cached documentation
+
+With [ranked search configured](semantic-search.md), add --semantic to update the passage index after repository preparation. Add --cached-only to skip all Git work. Both use the same campaign lock as normal updates. Search reports include pending embeddings, missing metadata and partial coverage; preparing and partial exit with status 1.
+
+A failed repository acquisition does not prevent the search-index phase from processing other available sources, provided the campaign has time remaining. The final status remains `failed` (exit 1), with the affected source identified in the errors; successful indexing does not clear acquisition failures. Reruns reuse completed downloads and embeddings.

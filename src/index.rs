@@ -16,11 +16,11 @@ use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 
 pub const SUPPORTED_VERSION: u32 = 1;
-pub const SUPPORTED_DRAFT_REVISION: &str = "2026-10-30";
+pub const SUPPORTED_DRAFT_REVISION: &str = "2026-11-02";
 
 /// A reference to a git repository at a particular ref. Index files use this both
 /// when they live in another repo and when their entries point at content in another repo.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GitRef {
     /// HTTPS or SSH URL of the repository.
@@ -42,32 +42,11 @@ pub struct GitRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_env: Option<String>,
 
-    /// Whether to recursively initialize git submodules after clone/refresh.
-    /// Defaults to true: many docs repos use submodules to compose docs from
-    /// other repos, and AIexandria needs the contents to read them.
-    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    /// Whether to initialize submodules recursively; defaults to false.
+    /// Always serialize the value so persisted references retain their meaning
+    /// across draft revisions with different defaults.
+    #[serde(default)]
     pub submodules: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn is_true(b: &bool) -> bool {
-    *b
-}
-
-impl Default for GitRef {
-    fn default() -> Self {
-        Self {
-            url: String::new(),
-            branch: None,
-            tag: None,
-            commit: None,
-            token_env: None,
-            submodules: true,
-        }
-    }
 }
 
 impl GitRef {

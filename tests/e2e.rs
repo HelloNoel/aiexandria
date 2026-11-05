@@ -393,7 +393,7 @@ fn refresh_policy_pulls_new_commits() {
 /// or placeholder submodule) must still clone cleanly — the URL-less submodule
 /// is skipped, not treated as a fatal error.
 #[test]
-fn urlless_submodule_is_skipped_not_fatal() {
+fn unconfigured_submodule_is_not_initialized_by_default() {
     let tmp = TempDir::new().unwrap();
     let repo_dir = tmp.path().join("repo");
     let url = make_docs_repo(&repo_dir);
@@ -432,7 +432,7 @@ fn urlless_submodule_is_skipped_not_fatal() {
     // Must not error on the URL-less submodule.
     let dir = cache
         .ensure(&git_ref)
-        .expect("clone should skip url-less submodule");
+        .expect("clone should leave submodules disabled by default");
     assert!(cache
         .read_file(&dir, "README.md")
         .unwrap()

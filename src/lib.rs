@@ -14,6 +14,7 @@ pub mod git_cli;
 pub mod index;
 pub mod registry;
 pub mod resolver;
+pub mod search;
 pub mod server;
 pub mod update;
 

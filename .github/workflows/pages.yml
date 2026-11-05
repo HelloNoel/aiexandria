@@ -6,7 +6,7 @@ on:
     inputs:
       ref:
         description: Released documentation tag
-        default: v0.3.0
+        default: v0.4.0
         required: true
 permissions:
   contents: read

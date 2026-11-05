@@ -227,6 +227,7 @@ fn bulk_updates_coalesce_across_processes_and_wait_rechecks_force() {
             .arg(f.cache.root())
             .args([
                 "update",
+                "--all",
                 "--index",
                 "docs",
                 "--force",
@@ -252,6 +253,11 @@ fn bulk_updates_coalesce_across_processes_and_wait_rechecks_force() {
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&duplicate.stdout).unwrap()["status"],
         "already_running"
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&duplicate.stdout).unwrap()["active_scope"]
+            ["all"],
+        true
     );
     let waiting = spawn(true);
     std::thread::sleep(Duration::from_millis(100));
@@ -589,3 +595,56 @@ fn submodule_host_credentials_partition_shared_cache_profiles() {
 
 #[path = "cache_cli/pins.rs"]
 mod pins;
+#[path = "cache_cli/submodules.rs"]
+mod submodules;
+#[path = "cache_cli/update.rs"]
+mod update;
+
+#[test]
+fn cached_semantic_update_reports_coverage_without_fetching_and_shares_campaign_lock() {
+    let f = Fixture::new("sha1", true);
+    f.cache.ensure(&f.origin).unwrap();
+    let registry = f.temp.path().join("registry.yaml");
+    std::fs::write(&registry, format!("indexes:\n docs:\n  repo: {{url: '{}', branch: main, submodules: false}}\n  path: pinakes.yaml\n  refresh: never\n", f.origin.url)).unwrap();
+    let search = f.temp.path().join("search.yaml");
+    std::fs::write(&search, "enabled: true\n").unwrap();
+    std::fs::rename(&f.repo, f.temp.path().join("offline-remote")).unwrap();
+    let run = |extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_aiexandria"))
+            .arg("--registry")
+            .arg(&registry)
+            .arg("--cache")
+            .arg(f.cache.root())
+            .arg("--search-config")
+            .arg(&search)
+            .args(["update", "--semantic", "--cached-only", "--json"])
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    let output = run(&[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["status"], "completed");
+    assert_eq!(value["updated"], 0);
+    assert_eq!(value["search"]["indexed_sources"], 2);
+    let owner = lock(&f.cache.root().join("update.lock"));
+    let skipped: serde_json::Value = serde_json::from_slice(&run(&[]).stdout).unwrap();
+    assert_eq!(skipped["status"], "already_running");
+    drop(owner);
+    let dry: serde_json::Value = serde_json::from_slice(&run(&["--dry-run"]).stdout).unwrap();
+    assert_eq!(dry["status"], "planned");
+    assert_eq!(dry["active_scope"]["semantic"], true);
+    assert_eq!(dry["active_scope"]["cached_only"], true);
+    assert!(!run(&["--force"]).status.success());
+    std::fs::write(&search, "enabled: true\nmax_corpus_bytes: 1\n").unwrap();
+    let partial = run(&[]);
+    assert_eq!(partial.status.code(), Some(1));
+    let partial: serde_json::Value = serde_json::from_slice(&partial.stdout).unwrap();
+    assert_eq!(partial["status"], "partial");
+    assert!(partial["search"]["partial_sources"].as_u64().unwrap() > 0);
+}

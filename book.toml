@@ -1,6 +1,6 @@
 [book]
 title = "AIexandria"
-description = "MCP server that gives LLMs hierarchical access to git-hosted documentation"
+description = "Documentation discovery and search for AI assistants"
 authors = ["Noel Chia"]
 language = "en"
 src = "docs"

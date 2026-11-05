@@ -33,7 +33,7 @@ add these entries beneath the same indexes mapping:
   aiexandria:
     repo:
       url: https://github.com/HelloNoel/aiexandria.git
-      tag: v0.3.0
+      tag: v0.4.0
       submodules: false
     path: docs/pinakes.yaml
     refresh: never

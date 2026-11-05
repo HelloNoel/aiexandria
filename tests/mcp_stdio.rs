@@ -39,6 +39,10 @@ entries:
 "#,
     );
     write(&dir.join("README.md"), "smoke readme\n");
+    write(
+        &dir.join("details.md"),
+        "before excerpt\ncertificate provisioning evidence\nafter excerpt\n",
+    );
 
     let repo = Repository::init_opts(dir, git2::RepositoryInitOptions::new().initial_head("main"))
         .unwrap();
@@ -70,6 +74,19 @@ fn read_response(reader: &mut BufReader<std::process::ChildStdout>, deadline: In
         return serde_json::from_str(&line).unwrap();
     }
     panic!("timed out waiting for response");
+}
+
+// Claude and other clients can consume only structuredContent when it is present.
+fn structured_text(response: &Value) -> &str {
+    let result = &response["result"];
+    let structured = &result["structuredContent"];
+    assert_eq!(structured["status"], "ready");
+    assert!(structured["snapshot"].is_string());
+    let text = structured["content"][0]["text"]
+        .as_str()
+        .expect("structured result must include the tool output");
+    assert_eq!(result["content"][0]["text"], text);
+    text
 }
 
 #[test]
@@ -166,6 +183,7 @@ fn mcp_stdio_round_trip() {
     let read = read_response(&mut stdout, deadline);
     let text = read["result"]["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("smoke readme"), "got: {text}");
+    assert_eq!(structured_text(&read), "smoke readme\n");
 
     send(
         &mut stdin,
@@ -175,6 +193,7 @@ fn mcp_stdio_round_trip() {
     let cmd = read_response(&mut stdout, deadline);
     let cmd_text = cmd["result"]["content"][0]["text"].as_str().unwrap();
     assert_eq!(cmd_text.trim(), "hi world");
+    assert_eq!(structured_text(&cmd).trim(), "hi world");
 
     send(
         &mut stdin,
@@ -205,6 +224,8 @@ fn mcp_stdio_round_trip() {
         "params":{"name":"list_docs", "arguments":{"index":"smoke", "entry_id":"greet"}}}),
     );
     let guidance = read_response(&mut stdout, deadline);
+    let structured_entries: Value = serde_json::from_str(structured_text(&guidance)).unwrap();
+    assert_eq!(structured_entries[0]["id"], "greet");
     let entries: Value =
         serde_json::from_str(guidance["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(entries.as_array().unwrap().len(), 1);
@@ -215,6 +236,8 @@ fn mcp_stdio_round_trip() {
         "params":{"name":"list_docs", "arguments":{"index":"smoke", "metadata_only":true}}}),
     );
     let metadata = read_response(&mut stdout, deadline);
+    let structured_metadata: Value = serde_json::from_str(structured_text(&metadata)).unwrap();
+    assert_eq!(structured_metadata["name"], "smoke");
     let metadata: Value =
         serde_json::from_str(metadata["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(metadata["name"], "smoke");
@@ -229,6 +252,26 @@ fn mcp_stdio_round_trip() {
         .as_str()
         .unwrap()
         .contains("refresh_wait_ms"));
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0", "id":10, "method":"tools/call",
+        "params":{"name":"read_file", "arguments":{"index":"smoke", "entry_id":"greet",
+            "file":"details.md", "offset":2, "limit":1,
+            "snapshot":read["result"]["structuredContent"]["snapshot"]}}}),
+    );
+    let excerpt = read_response(&mut stdout, deadline);
+    assert_eq!(
+        structured_text(&excerpt),
+        "[lines 2-2 of 3]\ncertificate provisioning evidence"
+    );
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0", "id":11, "method":"tools/call",
+        "params":{"name":"search_docs", "arguments":{"index":"smoke", "query":"README"}}}),
+    );
+    let search = read_response(&mut stdout, deadline);
+    let hits: Value = serde_json::from_str(structured_text(&search)).unwrap();
+    assert_eq!(hits[0]["id"], "readme");
     drop(stdin);
     let _ = child.wait();
 }

@@ -24,7 +24,7 @@ use crate::error::{AIexError, Result};
 pub const INDEX_FILENAME: &str = "pinakes.yaml";
 
 /// Files we treat as documentation. mdx is included for Docusaurus repos.
-const DOC_EXTENSIONS: &[&str] = &["md", "mdx", "rst", "txt", "adoc"];
+const DOC_EXTENSIONS: &[&str] = &["md", "markdown", "mdx", "rst", "txt", "adoc"];
 
 /// Directories we never descend into.
 const SKIP_DIRS: &[&str] = &[
@@ -130,6 +130,7 @@ fn build_index(repo_root: &Path, dir: &Path, opts: &GenerateOptions) -> Result<G
                     path: INDEX_FILENAME.into(),
                     repo: Some(GeneratedRepo {
                         url: url.clone(),
+                        submodules: false,
                         branch: None,
                     }),
                     argv: None,
@@ -416,6 +417,7 @@ struct GeneratedEntry {
 #[derive(Serialize)]
 struct GeneratedRepo {
     url: String,
+    submodules: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     branch: Option<String>,
 }
@@ -437,6 +439,8 @@ mod tests {
         write(&root.join("README.md"), "# r");
         write(&root.join("docs/getting-started.md"), "# gs");
         write(&root.join("docs/api/users.md"), "# u");
+        write(&root.join("NOTES.MARKDOWN"), "# notes");
+        write(&root.join("reference/overview.markdown"), "# reference");
 
         let yaml = generate_index(root, &GenerateOptions::default()).unwrap();
         assert!(yaml.contains("readme"));
@@ -444,6 +448,9 @@ mod tests {
         // nested index for docs/ written
         assert!(root.join("docs/pinakes.yaml").exists());
         assert!(root.join("docs/api/pinakes.yaml").exists());
+        assert!(yaml.contains("NOTES.MARKDOWN"));
+        let reference = std::fs::read_to_string(root.join("reference/pinakes.yaml")).unwrap();
+        assert!(reference.contains("reference/overview.markdown"));
     }
 
     #[test]

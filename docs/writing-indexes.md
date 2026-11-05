@@ -21,6 +21,8 @@ The --no-search option avoids an optional command requiring ripgrep. Built-in
 search matches entry metadata; deep: true also searches listed documents at the
 selected level. It does not search every repository file.
 
+When generating from a Git URL, submodule cloning is disabled by default. Add `--submodules` to download nested repositories recursively. For an existing local checkout, generation uses the files already present; it does not initialize submodules. The older `--no-submodules` flag remains accepted for compatibility.
+
 ## Help discovery select a source
 
 Give each topic a precise name and a short description containing its subject,

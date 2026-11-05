@@ -211,7 +211,8 @@ async fn refresh_removes_sources_but_cursor_keeps_its_snapshot() {
             ("child.yaml", "version: 1\nname: Topic child\nentries: []"),
         ],
         false,
-        RefreshSetting::Every(Duration::from_millis(100)),
+        // Allow the initial selective checkout to finish before the first refresh.
+        RefreshSetting::Every(Duration::from_secs(1)),
     );
     let first = fixture.query(json!({"query":"Topic", "limit":1})).await;
     assert_eq!(first["catalog"]["complete"], true);
@@ -224,7 +225,7 @@ async fn refresh_removes_sources_but_cursor_keeps_its_snapshot() {
         "version: 1\nname: Topic\nentries: []\n",
     );
     commit(&fixture.repo);
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     let updated = fixture.query(json!({"query":"Topic"})).await;
     assert_eq!(updated["catalog"]["complete"], true, "{updated}");
     assert_eq!(updated["sources"].as_array().unwrap().len(), 1);
@@ -407,7 +408,7 @@ fn byte_bounded_pages_preserve_unicode_and_every_locator() {
     let mut offset = 0;
     let mut ids = BTreeSet::new();
     loop {
-        let body = render_page(&snapshot, offset, 20, 2048).unwrap();
+        let body = render_page(&snapshot, offset, 20, 2048, None).unwrap();
         assert!(body.len() <= 2048);
         let page: Value = serde_json::from_str(&body).unwrap();
         for source in page["sources"].as_array().unwrap() {
@@ -420,13 +421,13 @@ fn byte_bounded_pages_preserve_unicode_and_every_locator() {
         offset = cursor.rsplit_once(':').unwrap().1.parse().unwrap();
     }
     assert_eq!(ids.len(), 12);
-    let small = render_page(&snapshot, 0, 1, 512).unwrap();
+    let small = render_page(&snapshot, 0, 1, 512, None).unwrap();
     assert!(small.len() <= 512);
     let huge_locator = QuerySnapshot {
         sources: vec![source(&"x".repeat(4096), "", "", "")],
         ..snapshot
     };
-    assert!(render_page(&huge_locator, 0, 1, 512)
+    assert!(render_page(&huge_locator, 0, 1, 512, None)
         .unwrap_err()
         .contains("max_output_bytes"));
 }

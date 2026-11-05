@@ -28,6 +28,7 @@ const BUILD_BUDGET: Duration = Duration::from_secs(60);
 pub enum SourceKind {
     Browse,
     Command,
+    CachedRepository,
 }
 
 /// These are ordinary search_docs arguments; no new authority is granted.
@@ -39,7 +40,7 @@ pub struct SourceRoute {
     pub command_id: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Source {
     pub id: String,
     pub kind: SourceKind,
@@ -50,6 +51,8 @@ pub(crate) struct Source {
     pub length: f64,
     pub normalized_name: String,
     pub route: SourceRoute,
+    pub search_modes: Vec<&'static str>,
+    pub has_documents: bool,
 }
 
 impl Source {
@@ -81,6 +84,8 @@ impl Source {
         }
         let normalized_name = tokenize(&name).join(" ");
         Self {
+            search_modes: Vec::new(),
+            has_documents: !docs.is_empty(),
             id: format!("src_{}", hex::encode(Sha256::digest(identity))),
             kind,
             name,

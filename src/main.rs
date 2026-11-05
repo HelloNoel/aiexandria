@@ -32,6 +32,10 @@ struct Cli {
     #[arg(long, env = "AIEXANDRIA_AUTH", global = true)]
     auth: Option<PathBuf>,
 
+    /// Optional ranked-search configuration; defaults to ~/.config/aiexandria/search.yaml.
+    #[arg(long, env = "AIEXANDRIA_SEARCH_CONFIG", global = true)]
+    search_config: Option<PathBuf>,
+
     /// Override the repo cache root.
     #[arg(long, env = "AIEXANDRIA_CACHE", global = true)]
     cache: Option<PathBuf>,
@@ -60,8 +64,18 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Refresh index metadata and cached sources, or prewarm a selected route.
+    /// Refresh index metadata and cached sources; use --all to include uncached sources.
     Update {
+        /// Prepare all referenced sources in scope, including uncached repositories.
+        /// Respects --index/--path and does not force a refresh or execute commands.
+        #[arg(long, conflicts_with = "cached_only")]
+        all: bool,
+        /// Prepare ranked search and configured embeddings as part of this update.
+        #[arg(long)]
+        semantic: bool,
+        /// With --semantic, index existing content without Git acquisition.
+        #[arg(long, requires = "semantic", conflicts_with = "force")]
+        cached_only: bool,
         #[arg(long)]
         index: Option<String>,
         /// Entry-ID path components; repeat for nested indexes.
@@ -103,8 +117,12 @@ enum Command {
         #[arg(long)]
         no_search: bool,
 
-        /// Skip submodule init when cloning. Ignored when --repo is a path.
-        #[arg(long)]
+        /// Clone submodules recursively. Ignored when --repo is a local path.
+        #[arg(long, conflicts_with = "no_submodules")]
+        submodules: bool,
+
+        /// Compatibility flag: submodule cloning is already disabled by default.
+        #[arg(long, hide = true)]
         no_submodules: bool,
     },
 }
@@ -185,7 +203,11 @@ async fn main() -> Result<()> {
 
     let cache = load_cache(&cli)?;
 
-    let server = AIexandriaServer::new(registry, cache);
+    let config = aiexandria::search::config::SearchConfig::load(cli.search_config.as_deref())?;
+    let mut server = AIexandriaServer::new(registry, cache);
+    if let Some(config) = config {
+        server = server.with_search(config)?;
+    }
     let service = server
         .serve(stdio())
         .await
@@ -197,6 +219,9 @@ async fn main() -> Result<()> {
 async fn run_subcommand(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Update {
+            all,
+            semantic,
+            cached_only,
             index,
             path,
             command_id,
@@ -215,6 +240,21 @@ async fn run_subcommand(cli: &Cli, cmd: &Command) -> Result<()> {
             );
             let cache = usage(load_cache(cli));
             let options = aiexandria::update::UpdateOptions {
+                all: *all,
+                semantic: if *semantic {
+                    Some(usage(
+                        aiexandria::search::config::SearchConfig::load(
+                            cli.search_config.as_deref(),
+                        )
+                        .map_err(Into::into)
+                        .and_then(|c| {
+                            c.context("enable search in search.yaml before using --semantic")
+                        }),
+                    ))
+                } else {
+                    None
+                },
+                cached_only: *cached_only,
                 index: index.clone(),
                 path: path.clone(),
                 command_id: command_id.clone(),
@@ -238,8 +278,20 @@ async fn run_subcommand(cli: &Cli, cmd: &Command) -> Result<()> {
                 for error in &report.errors {
                     eprintln!("{error}");
                 }
+                if let Some(search) = &report.search {
+                    println!(
+                        "Search: {} sources checked, {} changed, {} chunks embedded, {} pending, {} partial, {} unavailable metadata levels (inventory limited: {})",
+                        search.indexed_sources,
+                        search.changed_sources,
+                        search.embedded_chunks,
+                        search.pending_sources, search.partial_sources, search.unavailable_levels, search.inventory_limited
+                    );
+                }
             }
-            if matches!(report.status.as_str(), "failed" | "timed_out") {
+            if matches!(
+                report.status.as_str(),
+                "failed" | "timed_out" | "preparing" | "partial"
+            ) {
                 std::process::exit(1);
             }
             Ok(())
@@ -250,6 +302,7 @@ async fn run_subcommand(cli: &Cli, cmd: &Command) -> Result<()> {
             output,
             no_nested,
             no_search,
+            submodules,
             no_submodules,
         } => {
             let opts = GenerateOptions {
@@ -271,7 +324,7 @@ async fn run_subcommand(cli: &Cli, cmd: &Command) -> Result<()> {
                 let git_ref = GitRef {
                     url: repo.clone(),
                     branch: branch.clone(),
-                    submodules: !no_submodules,
+                    submodules: *submodules && !no_submodules,
                     ..Default::default()
                 };
                 // Generation may write nested indexes; preserve the published snapshot.

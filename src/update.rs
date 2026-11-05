@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Default)]
 pub struct UpdateOptions {
+    pub all: bool,
+    pub semantic: Option<crate::search::config::SearchConfig>,
+    pub cached_only: bool,
     pub index: Option<String>,
     pub path: Vec<String>,
     pub command_id: Option<String>,
@@ -23,6 +26,8 @@ pub struct UpdateOptions {
 }
 #[derive(Debug, Serialize)]
 pub struct UpdateReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<crate::search::UpdateReport>,
     pub status: String,
     pub updated: usize,
     pub unchanged: usize,
@@ -33,6 +38,7 @@ pub struct UpdateReport {
 impl Default for UpdateReport {
     fn default() -> Self {
         Self {
+            search: None,
             status: "completed".into(),
             updated: 0,
             unchanged: 0,
@@ -45,6 +51,15 @@ impl Default for UpdateReport {
 impl UpdateOptions {
     pub fn validate(&self, registry: &RegistryConfig) -> Result<()> {
         let options = self;
+        if options.cached_only && (options.semantic.is_none() || options.force || options.all) {
+            return Err(AIexError::Other(
+                "--cached-only requires --semantic and cannot be combined with --force or --all"
+                    .into(),
+            ));
+        }
+        if let Some(config) = &options.semantic {
+            config.validate()?;
+        }
         if options.index.is_none() && (!options.path.is_empty() || options.command_id.is_some()) {
             return Err(AIexError::Other(
                 "--path and --command-id require --index".into(),
@@ -64,7 +79,7 @@ impl UpdateOptions {
     }
 }
 
-type Work = (GitRef, RefreshPolicy, Selection);
+type Work = (GitRef, RefreshPolicy, Selection, String);
 pub fn run(
     cache: &RepoCache,
     registry: &RegistryConfig,
@@ -80,7 +95,7 @@ pub fn run(
             ..Default::default()
         };
         report.active_scope = Some(
-            serde_json::json!({"index":options.index,"path":options.path,"command_id":options.command_id,"cached_repositories":cache.cached_origins().len(),"network":false,"coverage":"cached inventory only; uncached metadata has not been traversed"}),
+            serde_json::json!({"index":options.index,"path":options.path,"command_id":options.command_id,"all":options.all,"semantic":options.semantic.is_some(),"cached_only":options.cached_only,"cached_repositories":cache.cached_origins().len(),"network":false,"coverage":"cached inventory only; uncached metadata has not been traversed"}),
         );
         return Ok(report);
     }
@@ -107,7 +122,7 @@ pub fn run(
     };
     atomic_json(
         &scope_file,
-        &serde_json::json!({"index":options.index,"path":options.path,"command_id":options.command_id,"started_ms":now_ms()}),
+        &serde_json::json!({"index":options.index,"path":options.path,"command_id":options.command_id,"all":options.all,"semantic":options.semantic.is_some(),"cached_only":options.cached_only,"started_ms":now_ms()}),
     )?;
     let cache = cache.for_update(deadline, options.force.then_some(requested_ms));
     let resolver = Resolver::new(&cache);
@@ -115,6 +130,9 @@ pub fn run(
     let mut work: BTreeMap<PathBuf, Work> = BTreeMap::new();
     let mut visited = HashSet::new();
     for (name, root) in &registry.indexes {
+        if options.cached_only {
+            break;
+        }
         if options
             .index
             .as_ref()
@@ -152,14 +170,19 @@ pub fn run(
                 }
                 work.insert(
                     cache.path_for(&entry.origin),
-                    (entry.origin.clone(), entry.refresh, Selection::all()),
+                    (
+                        entry.origin.clone(),
+                        entry.refresh,
+                        Selection::all(),
+                        format!("{} / {}", level.name, entry.view.id),
+                    ),
                 );
             } else {
                 collect(
                     &cache,
                     &resolver,
                     level,
-                    !options.path.is_empty(),
+                    options.all || !options.path.is_empty(),
                     &mut visited,
                     &mut work,
                     &mut report,
@@ -182,7 +205,8 @@ pub fn run(
                 if Instant::now() >= deadline {
                     break;
                 }
-                let Some((origin, policy, selection)) = work.lock().unwrap().pop_front() else {
+                let Some((origin, policy, selection, source)) = work.lock().unwrap().pop_front()
+                else {
                     break;
                 };
                 let before = cache.state(&origin).map(|s| s.checked_ms);
@@ -201,7 +225,10 @@ pub fn run(
                         }
                         Ok(cache.state(&origin).map(|s| s.checked_ms) != before)
                     });
-                outcomes.lock().unwrap().push(result);
+                outcomes
+                    .lock()
+                    .unwrap()
+                    .push(result.map_err(|error| format!("{source}: {error}")));
             });
         }
     });
@@ -209,13 +236,66 @@ pub fn run(
         match result {
             Ok(true) => report.updated += 1,
             Ok(false) => report.unchanged += 1,
-            Err(error) => report.errors.push(error.to_string()),
+            Err(error) => report.errors.push(error),
         }
     }
     if Instant::now() >= deadline || !work.lock().unwrap().is_empty() {
         report.status = "timed_out".into();
     } else if !report.errors.is_empty() {
         report.status = "failed".into();
+    }
+    // A failed acquisition must not prevent indexing the other cached sources.
+    // Preserve its failure in the final status even if indexing succeeds.
+    if report.status != "timed_out" {
+        if let Some(config) = &options.semantic {
+            let search = crate::search::SearchService::new(
+                config.clone(),
+                Arc::new(registry.clone()),
+                Arc::new(cache.clone()),
+            )?;
+            let mut embedded = 0;
+            let acquisition_failed = !report.errors.is_empty();
+            loop {
+                let mut result = search.update(
+                    options.index.as_deref(),
+                    &options.path,
+                    options.command_id.as_deref(),
+                    deadline,
+                )?;
+                embedded += result.embedded_chunks;
+                result.embedded_chunks = embedded;
+                let retry = options.wait
+                    && result.pending_sources > 0
+                    && result.errors.is_empty()
+                    && Instant::now() < deadline;
+                if !result.errors.is_empty() {
+                    report.status = "failed".into();
+                    report.errors.extend(result.errors.iter().cloned());
+                } else if result.pending_sources > 0 {
+                    report.status = if Instant::now() >= deadline {
+                        "timed_out"
+                    } else {
+                        "preparing"
+                    }
+                    .into();
+                } else if result.unavailable_levels > 0
+                    || result.inventory_limited
+                    || result.partial_sources > 0
+                {
+                    report.status = "partial".into();
+                } else {
+                    report.status = "completed".into();
+                }
+                if acquisition_failed && report.status != "timed_out" {
+                    report.status = "failed".into();
+                }
+                report.search = Some(result);
+                if !retry {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
     }
     cache.git.cancel();
     Ok(report)
@@ -276,7 +356,14 @@ fn collect(
                 }
                 let job = work
                     .entry(cache.path_for(&entry.origin))
-                    .or_insert_with(|| (entry.origin.clone(), entry.refresh, Selection::default()));
+                    .or_insert_with(|| {
+                        (
+                            entry.origin.clone(),
+                            entry.refresh,
+                            Selection::default(),
+                            format!("{} / {}", level.name, entry.view.id),
+                        )
+                    });
                 job.2.all |= selection.all;
                 job.2.paths.extend(selection.paths);
             }

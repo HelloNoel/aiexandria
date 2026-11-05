@@ -902,5 +902,201 @@
         }
       }
     }
+  },
+  {
+    "name": "index submodules omitted",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git"
+          }
+        }
+      ]
+    },
+    "expected_submodules": [
+      false
+    ]
+  },
+  {
+    "name": "index submodules enabled",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "submodules": true
+          }
+        }
+      ]
+    },
+    "expected_submodules": [
+      true
+    ]
+  },
+  {
+    "name": "index submodules disabled",
+    "valid": true,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "submodules": false
+          }
+        }
+      ]
+    },
+    "expected_submodules": [
+      false
+    ]
+  },
+  {
+    "name": "index submodules string",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "submodules": "false"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "index submodules null",
+    "valid": false,
+    "kind": "index",
+    "value": {
+      "version": 1,
+      "name": "docs",
+      "entries": [
+        {
+          "kind": "doc",
+          "name": "README",
+          "path": "README.md",
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "submodules": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "registry submodules omitted",
+    "valid": true,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    },
+    "expected_submodules": [
+      false
+    ]
+  },
+  {
+    "name": "registry submodules enabled",
+    "valid": true,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "submodules": true
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    },
+    "expected_submodules": [
+      true
+    ]
+  },
+  {
+    "name": "registry submodules disabled",
+    "valid": true,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "submodules": false
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    },
+    "expected_submodules": [
+      false
+    ]
+  },
+  {
+    "name": "registry submodules string",
+    "valid": false,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "submodules": "false"
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
+  },
+  {
+    "name": "registry submodules null",
+    "valid": false,
+    "kind": "registry",
+    "value": {
+      "indexes": {
+        "docs": {
+          "repo": {
+            "url": "https://example.com/docs.git",
+            "submodules": null
+          },
+          "path": "pinakes.yaml"
+        }
+      }
+    }
   }
 ]

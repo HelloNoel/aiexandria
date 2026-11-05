@@ -1,6 +1,6 @@
 # Configuration and troubleshooting
 
-This page describes the next release. Published v0.3.0 uses the previous Git backend.
+AIexandria v0.4.0 requires Git 2.43.7 or newer. Existing registries continue to work; ranked search is configured separately and is optional.
 
 ## Registry selection
 
@@ -52,7 +52,24 @@ AIEXANDRIA_REFRESH, whose default is never. Public defaults refresh after 24h;
 release help uses never. Commit pins are immutable. Refresh happens when next
 needed after the interval, not by periodic background polling.
 
+## Submodule documentation
+
+Submodule downloads are disabled by default. If documentation lives in nested Git repositories, enable them in the relevant index entry or registry root:
+
+~~~yaml
+repo:
+  url: https://github.com/YOUR-TEAM/docs.git
+  branch: main
+  submodules: true
+~~~
+
+This initializes submodules recursively and can download additional repositories. It also applies when preparing a custom-command source or running `update --all`. Entries without their own `repo:` use their enclosing index's repository settings.
+
+When upgrading from an earlier default, add explicit `submodules: true` to sources that rely on nested documentation. Explicit `false` remains useful when sharing an index with older consumers. Existing caches keep their recorded options; a reference whose effective setting changes uses a separate cache.
+
 ## Common problems
+
+**Git reports a submodule without a URL:** the upstream repository contains a gitlink that has no matching URL in `.gitmodules`. Fix that repository, or set `submodules: false` in its Pinakes `repo:` blocks if the documentation you need is stored in the parent repository. This excludes all submodule content for those references; AIexandria does not silently skip required submodules. An update reports the affected source as failed while still indexing other available sources when time remains.
 
 **Server not found:** use an absolute executable path and check it with --version.
 Restart the client after configuration changes or replacing the executable.
@@ -71,7 +88,7 @@ languages; follow their descriptions.
 
 **Git missing or too old:** install Git 2.43.7 or newer and make it available on the MCP process's PATH, or set --git /absolute/path/to/git / AIEXANDRIA_GIT. A GUI client's PATH may differ from your terminal's.
 
-**SHA-256 repository fails:** use the development build with Git 2.43.7 or newer; releases through v0.3.0 do not support these repositories. Use the full 64-character SHA-256 commit ID or an unambiguous hexadecimal prefix of at least seven characters. SHA-1 IDs remain 40 characters, with the same minimum prefix length. A pin must identify a commit in that repository; branches or tags with hexadecimal names do not override it. Prefer full IDs when sharing indexes.
+**SHA-256 repository fails:** check that AIexandria reports v0.4.0 or newer and that the MCP process uses Git 2.43.7 or newer. Use a full 64-character SHA-256 commit ID or an unambiguous hexadecimal prefix of at least seven characters. SHA-1 IDs remain 40 characters, with the same minimum prefix length. A pin must identify a commit in that repository; branches or tags with hexadecimal names do not override it. Prefer full IDs when sharing indexes.
 
 Set RUST_LOG=aiexandria=debug for diagnostic logs on stderr. Review logs for
 private repository information before sharing them.
@@ -79,3 +96,9 @@ private repository information before sharing them.
 Explicit document and index paths use selective checkout and partial clone when supported by the server. Required submodules and command searches receive complete checkouts. Hooks and checkout filters, including Git LFS smudging, are disabled; LFS pointers are not expanded. Commands run in temporary copies so writes cannot corrupt shared snapshots.
 
 The new cache layout preserves older caches for rollback. Current and previous snapshots, active reads, and unexpired follow-up tokens are retained; older unused generations are cleaned during publication. Do not edit cache checkouts by hand. See [repository updates](updating.md) for prewarming and scheduling.
+
+For ranked searches, also check `mode_used` and corpus coverage. A global search only covers indexed cached documentation; use discovery and a scoped update to prepare missing sources. See [semantic search](semantic-search.md) for provider errors, fallback behavior and work limits.
+
+## Optional ranked search
+
+Use a separate search.yaml configuration for keyword, semantic and hybrid passage retrieval. It is disabled unless explicitly enabled. See [semantic search](semantic-search.md) for local providers, corpus filters, limits and incremental updates. This configuration does not change the Pinakes format.

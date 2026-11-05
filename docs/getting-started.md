@@ -1,16 +1,18 @@
 # Getting started
 
-This guide takes you from installation to reading a real document with AIexandria v0.3.0. The public starter collection requires no Git hosting account or search service.
+This guide takes you from installation to reading a real document with AIexandria v0.4.0. The public starter collection requires no Git hosting account or search service.
 
 ## 1. Install
 
-Download your platform's archive from the [v0.3.0 release](https://github.com/HelloNoel/aiexandria/releases/tag/v0.3.0), extract it, and put the executable on PATH. See [installation](installation.md) for platform-specific commands and checksum verification.
+Install [Git 2.43.7 or newer](https://git-scm.com/install/) and make sure it is on your MCP client's PATH. Check it with `git --version`.
+
+Download your platform's archive from the [v0.4.0 release](https://github.com/HelloNoel/aiexandria/releases/tag/v0.4.0), extract it, and put the executable on PATH. See [installation](installation.md) for platform-specific commands and checksum verification.
 
 ~~~sh
 aiexandria --version
 ~~~
 
-The output should report 0.3.0. Older binaries do not include the discovery tool or default collection described here.
+The output should report 0.4.0. Version 0.4.0 adds the Git CLI backend, repository updates and optional ranked search; discovery and the starter collection were introduced in v0.3.0.
 
 ## 2. Connect your assistant
 
@@ -42,7 +44,7 @@ A precise tool-level check uses read_doc with:
 {"index":"aiexandria","entry_id":"getting-started","offset":1,"limit":40}
 ~~~
 
-It should return this guide and identify v0.3.0. The first call may wait while AIexandria acquires its help repository.
+It should return this guide and identify v0.4.0. The first call may wait while AIexandria acquires its help repository.
 
 Then try:
 
@@ -54,4 +56,8 @@ The assistant should discover a source, search or browse its selected pages, and
 
 [Add your documentation](adding-documentation.md) when you are ready. An explicit registry, or an existing registry at the default location, replaces the built-in defaults. Existing installations keep their own collection.
 
-A successful connection does not mean every source is cached. On a slow first search, refresh_pending means acquisition is still running; retry after the suggested delay. See [troubleshooting](configuration.md#common-problems).
+A successful connection does not mean every source is cached. On a slow first search, a `preparing` response means acquisition is still running; retry after the suggested delay. See [troubleshooting](configuration.md#common-problems).
+
+For conceptual questions and searches across repositories, [enable ranked search](semantic-search.md). Keyword search needs no model; semantic and hybrid search use an embedding provider you configure separately.
+
+We recommend [preparing frequently used sources](updating.md) during setup. To prepare the whole public collection, run `aiexandria update --all --index public-docs --wait --timeout 30m`; add `--semantic` after enabling ranked search.

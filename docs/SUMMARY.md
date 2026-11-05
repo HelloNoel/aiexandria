@@ -11,3 +11,4 @@
 - [Reference](reference.md)
 
 - [Prepare and update repositories](updating.md)
+- [Semantic search](semantic-search.md)

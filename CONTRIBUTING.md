@@ -33,28 +33,31 @@ Execution uses its separate inherited timeout.
 Discovery ranking and content queries remain separate. Commands define their
 query languages and outputs. Full guidance is available through list_docs.
 
+## Ranked search architecture
+
+The optional search subsystem lives in src/search/. AIexandria owns cached corpus membership, Git revision provenance and read routes. SQLite FTS5/BM25 and stored normalized vectors provide keyword, semantic and hybrid retrieval. Embeddings come from a configured HTTP provider; inference runtimes are not part of the server.
+
+Scoped and global requests revalidate current authority before querying a consistent database snapshot. Global search filters and deduplicates the eligible union before ranking, with bounded work and output. It does not acquire missing Git content or synchronously build document embeddings. Preserve the legacy search path when mode is omitted.
+
+Background indexing and update --semantic share embedding locks, incremental vector reuse and query priority. Corpus configuration is separate from Pinakes. Retrieval budget changes should not invalidate embeddings. Test exclusions, stale membership, aliases, partial vectors, deadlines and snapshot-bound follow-up reads when changing this subsystem.
+
 ## Current limits and direction
 
-Prioritize source selection, useful excerpts, and easy maintenance. Discovery is
-lexical with no general relevance threshold. Search has no shared output budget;
-deep search covers listed current-level documents. Command policy is not OS
-isolation. The Git CLI backend supports SHA-1 and SHA-256 repositories and commit
-pins. Keep schemas, shared fixtures, and repository-aware validation aligned;
-record format changes in the [Pinakes changelog](https://github.com/HelloNoel/pinakes/blob/main/CHANGELOG.md).
+Prioritize useful evidence and easy maintenance. Discovery is lexical, with no general relevance threshold. Ranked passage search has result and byte budgets; legacy custom commands keep their own output limits. Neither semantic ranks nor hybrid scores prove that the corpus answers a question. Exact vector search is bounded, not an approximate index for arbitrary corpus sizes.
 
-Before adding a crawler or vector store, evaluate an adapter to an existing
-retriever through a command entry. Measure source-selection queries and real
-reads, output size, incomplete coverage, clone cost, and version mismatches.
+Evaluate larger collections and version-sensitive questions before adding ANN, reranking or cross-backend federation. Measure useful reads, output size, incomplete coverage, clone/indexing cost, provider startup and version mismatches. A small local benchmark is not an adoption or general quality result.
 
-For a four-week user pilot, collect setup failures, grounded reads, wrong-source
-selections, and time to add or repair an index. These are evaluation criteria,
-not completed adoption results.
+Command policies are not OS isolation. The Git CLI backend supports SHA-1 and SHA-256 repositories and commit pins. Keep schemas, shared fixtures and repository-aware validation aligned; record portable format changes in the [Pinakes changelog](https://github.com/HelloNoel/pinakes/blob/main/CHANGELOG.md).
 
 ## Releases
 
-Update package/lockfile versions, changelog, installation examples, and help refs
-together. Push a signed vX.Y.Z tag to build archives and checksums. Review CI and
-draft assets before publishing. The published release deploys the user guide.
+Prepare the package/lockfile versions, changelog, release-notes.md, README/download links, installation examples, explicit help refs and Pages dispatch default together. Built-in help automatically targets the package version. Keep the changelog entry marked Unreleased until publication is ready, then record the release date.
+
+Run the checks above and review the diff before committing. Release binaries are built by GitHub Actions when a signed vX.Y.Z tag is pushed; ordinary branch pushes run CI without rebuilding release archives. The tag must match Cargo.toml. The release matrix tests and packages all five targets, with fail-fast disabled so one failure does not cancel the remaining platform checks.
+
+After all builds succeed, the workflow creates a draft release and uploads archives plus SHA256SUMS. Review the notes, checksums and native Windows results before publishing. Publishing deploys the user guide from that tag. Resolve failed platform checks before publishing the draft.
+
+A source build needs Rust 1.89 or newer and a native C toolchain for SQLite/TLS. Tests also use git2 fixtures with vendored OpenSSL, which can require Perl and make. See .github/workflows/release.yml for the Windows GNU toolchain setup.
 
 ## Repository backend
 

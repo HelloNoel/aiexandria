@@ -49,7 +49,11 @@ pub struct DiscoveredSource {
     pub guidance_complete: bool,
     pub query_profile: &'static str,
     /// Existing route arguments accepted by search_docs; source_id can also be used directly.
-    pub search: SourceRoute,
+    pub search: serde_json::Value,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub search_modes: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_status: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,6 +151,7 @@ impl SourceRanker for BuiltinRanker {
 }
 
 pub(crate) struct DiscoveryService {
+    pub(crate) search: Option<crate::search::SearchService>,
     catalog: Catalog,
     snapshots: Mutex<VecDeque<Arc<QuerySnapshot>>>,
     ranking_slots: Arc<tokio::sync::Semaphore>,
@@ -155,6 +160,7 @@ pub(crate) struct DiscoveryService {
 impl DiscoveryService {
     pub fn new(registry: Arc<RegistryConfig>, cache: Arc<RepoCache>) -> Self {
         Self {
+            search: None,
             catalog: Catalog::new(registry, cache),
             snapshots: Mutex::new(VecDeque::new()),
             ranking_slots: Arc::new(tokio::sync::Semaphore::new(2)),
@@ -185,16 +191,24 @@ impl DiscoveryService {
             let offset = offset
                 .parse::<usize>()
                 .map_err(|_| "invalid discovery cursor")?;
-            let mut cache = self.snapshots.lock().expect("discovery snapshots poisoned");
-            cache.retain(|snapshot| snapshot.created.elapsed() < CURSOR_TTL);
-            let snapshot = cache
-                .iter()
-                .find(|snapshot| snapshot.id == id)
-                .ok_or("discovery cursor expired; repeat the query")?;
+            let snapshot = {
+                let mut cache = self.snapshots.lock().expect("discovery snapshots poisoned");
+                cache.retain(|snapshot| snapshot.created.elapsed() < CURSOR_TTL);
+                cache
+                    .iter()
+                    .find(|snapshot| snapshot.id == id)
+                    .ok_or("discovery cursor expired; repeat the query")?
+                    .clone()
+            };
             if offset >= snapshot.sources.len() {
                 return Err("invalid discovery cursor offset".into());
             }
-            return render_page(snapshot, offset, limit, bytes);
+            let search = self.search.clone();
+            return tokio::task::spawn_blocking(move || {
+                render_page(&snapshot, offset, limit, bytes, search.as_ref())
+            })
+            .await
+            .map_err(|_| "discovery rendering failed")?;
         }
         let query = req.query.ok_or("query is required without a cursor")?;
         let query = query.trim();
@@ -232,8 +246,48 @@ impl DiscoveryService {
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         };
-        let candidates: Vec<_> = snapshot
-            .sources
+        let mut sources = snapshot.sources;
+        if let Some(search) = &self.search {
+            let modes = if search.has_embeddings() {
+                vec!["keyword", "hybrid", "semantic"]
+            } else {
+                vec!["keyword"]
+            };
+            for source in &mut sources {
+                if source.kind == SourceKind::Browse
+                    && source.has_documents
+                    && search.supports(&source.route.index, &source.route.path)
+                {
+                    let source = Arc::make_mut(source);
+                    source.search_modes = modes.clone();
+                }
+            }
+            let search = search.clone();
+            let generated = tokio::task::spawn_blocking(move || search.sources())
+                .await
+                .map_err(|_| "cached source inventory failed")?;
+            for descriptor in generated {
+                if !names.contains(&descriptor.route.index) {
+                    continue;
+                }
+                let mut source = Source::new(
+                    SourceKind::CachedRepository,
+                    SourceRoute {
+                        index: descriptor.route.index,
+                        path: descriptor.route.path,
+                        command_id: None,
+                    },
+                    &descriptor.name,
+                    &descriptor.description,
+                    "cached repository documentation",
+                    "",
+                );
+                source.id = descriptor.id;
+                source.search_modes = modes.clone();
+                sources.push(Arc::new(source));
+            }
+        }
+        let candidates: Vec<_> = sources
             .into_iter()
             .filter(|source| {
                 req.kinds
@@ -279,7 +333,13 @@ impl DiscoveryService {
             limited,
             bytes: size,
         });
-        let result = render_page(&snapshot, 0, limit, bytes)?;
+        let rendered = snapshot.clone();
+        let search = self.search.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            render_page(&rendered, 0, limit, bytes, search.as_ref())
+        })
+        .await
+        .map_err(|_| "discovery rendering failed")??;
         let mut cache = self.snapshots.lock().expect("discovery snapshots poisoned");
         cache.retain(|snapshot| snapshot.created.elapsed() < CURSOR_TTL);
         while !cache.is_empty()
@@ -298,6 +358,7 @@ fn render_page(
     offset: usize,
     limit: usize,
     budget: usize,
+    search: Option<&crate::search::SearchService>,
 ) -> Result<String, String> {
     let mut response = DiscoveryResponse {
         sources: Vec::new(),
@@ -324,12 +385,20 @@ fn render_page(
             kind: source.kind,
             guidance_complete: source.description_complete && summary == source.description,
             summary,
-            query_profile: if source.kind == SourceKind::Command {
-                "source_defined"
-            } else {
-                "substring"
+            query_profile: match source.kind {
+                SourceKind::Command => "source_defined",
+                SourceKind::Browse => "substring",
+                SourceKind::CachedRepository => "natural_language",
             },
-            search: source.route.clone(),
+            search: if source.kind == SourceKind::CachedRepository {
+                serde_json::json!({"source_id": source.id, "mode": if source.search_modes.contains(&"hybrid") { "hybrid" } else { "keyword" }})
+            } else { serde_json::to_value(&source.route).unwrap() },
+            search_modes: source.search_modes.clone(),
+            search_status: search.filter(|_| !source.search_modes.is_empty()).map(|service| {
+                let id = if source.kind == SourceKind::CachedRepository { source.id.clone() }
+                    else { crate::search::corpus::Descriptor::curated_id(&source.route.index, &source.route.path) };
+                service.status(&id)
+            }),
         });
         let next = offset + response.sources.len();
         response.next_cursor =

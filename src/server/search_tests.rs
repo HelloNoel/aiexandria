@@ -37,9 +37,15 @@ struct Fixture {
 
 impl Fixture {
     fn new(body: &str) -> Self {
+        Self::with_files(body, &[])
+    }
+
+    fn with_files(body: &str, files: &[(&str, &str)]) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let remote = temp.path().join("repo");
-        let origin = repo(&remote, &[("pinakes.yaml", body)]);
+        let mut all = vec![("pinakes.yaml", body)];
+        all.extend_from_slice(files);
+        let origin = repo(&remote, &all);
         let cache = RepoCache::new(
             temp.path().join("cache"),
             crate::auth::AuthConfig::default(),
@@ -182,7 +188,11 @@ async fn failed_refresh_does_not_silently_search_cached_metadata() {
         .await
         .unwrap();
     assert_eq!(error.is_error, Some(true));
-    assert_eq!(error.structured_content.unwrap()["status"], "failed");
+    let message = &error.content[0].as_text().unwrap().text;
+    assert!(!message.is_empty());
+    let structured = error.structured_content.as_ref().unwrap();
+    assert_eq!(structured["status"], "failed");
+    assert_eq!(structured["message"], *message);
     assert!(!fixture.cached.join("marker").exists());
 }
 
@@ -330,4 +340,291 @@ async fn command_execution_has_its_own_timeout_after_preparation() {
     );
     assert!(start.elapsed() > Duration::from_millis(1100));
     assert!(serde_json::to_string(&result).unwrap().contains("finished"));
+}
+
+const RANKED: &str = "version: 1\nname: Tree documentation\nentries:\n - {id: guide, name: Trees, kind: doc, path: guide.md}\n - {id: custom, name: External search, kind: command, argv: [never-execute, '{query}']}\n";
+
+#[tokio::test]
+async fn ranked_discovery_search_and_snapshot_read_preserve_legacy_search() {
+    let mut fixture = Fixture::with_files(
+        RANKED,
+        &[
+            ("guide.md", "# Trees\nSquirrels gather acorns.\n"),
+            (
+                "extra.md",
+                "# Databases\nTransactions preserve consistency.\n",
+            ),
+        ],
+    );
+    fixture.server = fixture
+        .server
+        .with_search(crate::search::config::SearchConfig {
+            enabled: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let service = fixture.server.inner.search.as_ref().unwrap();
+    let report = service
+        .update(None, &[], None, Instant::now() + Duration::from_secs(10))
+        .unwrap();
+    assert!(report.errors.is_empty());
+    let discovery = fixture
+        .server
+        .discover_sources(Parameters(
+            serde_json::from_value(json!({"query":"Tree", "limit":10})).unwrap(),
+        ))
+        .await
+        .unwrap();
+    let wire = serde_json::to_value(discovery).unwrap();
+    let discovery: Value =
+        serde_json::from_str(wire["content"][0]["text"].as_str().unwrap()).unwrap();
+    let source = discovery["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["source_id"].as_str().unwrap().starts_with("cached:"))
+        .unwrap();
+    assert_eq!(source["search_modes"], json!(["keyword"]));
+    assert_eq!(source["search_status"]["keyword"], "ready");
+    assert_eq!(source["search_status"]["coverage"]["indexed_files"], 2);
+    let source_id = source["source_id"].as_str().unwrap();
+    let result = fixture.search(json!({"source_id":source_id, "query":"transactions", "limit":1, "max_output_bytes":2048})).await.unwrap();
+    assert_ne!(result.is_error, Some(true));
+    let value = result.structured_content.unwrap();
+    assert_eq!(value["mode_used"], "keyword");
+    assert_eq!(value["hits"][0]["file"], "extra.md");
+    assert!(serde_json::to_vec(&value).unwrap().len() <= 2048);
+    let hit = &value["hits"][0];
+    assert_eq!(hit["revision"].as_str().unwrap().len(), 40);
+    let mut read = hit["read"].clone();
+    for key in ["file", "offset", "limit"] {
+        read[key] = hit[key].clone();
+    }
+    read["snapshot"] = value["snapshot"].clone();
+    let read = fixture
+        .server
+        .read_file(Parameters(serde_json::from_value(read).unwrap()))
+        .await
+        .unwrap();
+    assert!(serde_json::to_string(&read)
+        .unwrap()
+        .contains("Transactions preserve consistency"));
+    let curated = fixture
+        .search(json!({"index":"docs", "query":"transactions", "mode":"keyword"}))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert!(
+        curated["hits"].as_array().unwrap().is_empty(),
+        "curated scope must not expand to the whole repository"
+    );
+    let legacy = fixture
+        .search(json!({"index":"docs", "query":"Squirrels", "deep":true}))
+        .await
+        .unwrap();
+    assert!(serde_json::to_string(&legacy)
+        .unwrap()
+        .contains("Squirrels"));
+    assert!(legacy
+        .structured_content
+        .unwrap()
+        .get("mode_used")
+        .is_none());
+    let fallback = fixture
+        .search(json!({"index":"docs", "query":"Squirrels", "mode":"hybrid"}))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(fallback["mode_used"], "keyword");
+    assert_eq!(fallback["semantic"]["status"], "not_configured");
+}
+
+#[tokio::test]
+async fn ranked_requests_validate_bounds_scopes_and_refresh_deadlines() {
+    let mut fixture = Fixture::with_files(RANKED, &[("guide.md", "Squirrels gather acorns.\n")]);
+    assert!(fixture
+        .search(json!({"index":"docs", "query":"Squirrels", "mode":"keyword"}))
+        .await
+        .is_err());
+    fixture.server = fixture
+        .server
+        .with_search(crate::search::config::SearchConfig {
+            enabled: true,
+            ..Default::default()
+        })
+        .unwrap();
+    for invalid in [
+        json!({"limit":0}),
+        json!({"limit":21}),
+        json!({"max_output_bytes":1023}),
+        json!({"max_output_bytes":32769}),
+        json!({"deep":true}),
+        json!({"query":" "}),
+        json!({"refresh_wait_ms":0}),
+        json!({"command_id":"custom"}),
+        json!({"source_id":"cached:missing"}),
+    ] {
+        let mut request = json!({"index":"docs", "query":"Squirrels", "mode":"keyword"});
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(invalid.as_object().unwrap().clone());
+        assert!(fixture.search(request.clone()).await.is_err(), "{request}");
+    }
+    let service = fixture.server.inner.search.as_ref().unwrap();
+    service
+        .update(None, &[], None, Instant::now() + Duration::from_secs(10))
+        .unwrap();
+    let source = service.sources().pop().unwrap();
+    let gate = Gate::hold(&fixture.cached);
+    let started = Instant::now();
+    let result = fixture.search(json!({"source_id":source.id, "query":"Squirrels", "mode":"keyword", "freshness":"require_fresh", "refresh_wait_ms":60})).await.unwrap();
+    assert_pending(&result);
+    let result = fixture.search(json!({"index":"docs", "query":"Squirrels", "mode":"keyword", "freshness":"require_fresh", "refresh_wait_ms":60})).await.unwrap();
+    assert_pending(&result);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    drop(gate);
+    fixture.finish_refresh(&fixture.origin).await;
+}
+
+#[tokio::test]
+async fn global_mcp_search_filters_and_reads_snapshots_across_repositories() {
+    let mut fixture = Fixture::with_files(
+        RANKED,
+        &[
+            ("guide.md", "# Trees\nAcorns and consistency.\n"),
+            ("extra.md", "# Extra\nAdditional consistency evidence.\n"),
+        ],
+    );
+    let other = Fixture::with_files(
+        RANKED,
+        &[(
+            "guide.md",
+            "# Transactions\nTransactions preserve consistency.\n",
+        )],
+    );
+    let cache = (*fixture.server.inner.cache).clone();
+    cache.ensure(&other.origin).unwrap();
+    let mut registry = (*fixture.server.inner.registry).clone();
+    registry
+        .indexes
+        .insert("alias".into(), registry.indexes["docs"].clone());
+    let mut second = registry.indexes["docs"].clone();
+    second.repo = other.origin.clone();
+    registry.indexes.insert("second".into(), second);
+    fixture.server = AIexandriaServer::new(registry, cache)
+        .with_search(crate::search::config::SearchConfig {
+            enabled: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let service = fixture.server.inner.search.as_ref().unwrap();
+    service
+        .update(None, &[], None, Instant::now() + Duration::from_secs(10))
+        .unwrap();
+    let result = fixture
+        .search(json!({"scope":"global", "query":"consistency", "limit":5}))
+        .await
+        .unwrap();
+    assert_ne!(result.is_error, Some(true));
+    let value = result.structured_content.unwrap();
+    assert_eq!(value["scope"], "global");
+    assert_eq!(value["mode_used"], "keyword");
+    assert_eq!(value["hits"].as_array().unwrap().len(), 3);
+    for hit in value["hits"].as_array().unwrap() {
+        let mut read = hit["read"].clone();
+        for key in ["file", "offset", "limit"] {
+            read[key] = hit[key].clone();
+        }
+        read["snapshot"] = value["snapshot"].clone();
+        let read = fixture
+            .server
+            .read_file(Parameters(serde_json::from_value(read).unwrap()))
+            .await
+            .unwrap();
+        assert!(serde_json::to_string(&read)
+            .unwrap()
+            .contains("consistency"));
+    }
+    let result = fixture.search(json!({"scope":"global", "indexes":["second"], "query":"consistency", "max_output_bytes":1024})).await.unwrap();
+    let body = serde_json::to_value(&result).unwrap()["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(body.len() <= 1024);
+    let value = result.structured_content.unwrap();
+    assert!(value["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|h| h["read"]["index"] == "second"));
+    let source = service
+        .sources()
+        .into_iter()
+        .find(|s| s.route.index == "docs")
+        .unwrap();
+    let filtered = fixture
+        .search(json!({"scope":"global", "source_ids":[source.id], "query":"consistency"}))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(filtered["hits"].as_array().unwrap().len(), 2);
+    assert!(filtered["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|h| h["read"]["index"] == "docs"));
+    let discovery: Value = serde_json::from_str(
+        &fixture
+            .server
+            .inner
+            .discovery
+            .discover(serde_json::from_value(json!({"query":"Tree", "limit":20})).unwrap())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let browse = discovery["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "browse" && s["search"]["index"] == "docs")
+        .unwrap();
+    let filtered = fixture
+        .search(
+            json!({"scope":"global", "source_ids":[browse["source_id"]], "query":"consistency"}),
+        )
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(
+        filtered["hits"].as_array().unwrap().len(),
+        1,
+        "browse filter must retain curated scope"
+    );
+    for invalid in [
+        json!({"index":"docs"}),
+        json!({"source_id":source.id}),
+        json!({"path":["x"]}),
+        json!({"deep":true}),
+        json!({"freshness":"require_fresh"}),
+        json!({"indexes":["unknown"]}),
+        json!({"source_ids":["unknown"]}),
+        json!({"limit":0}),
+    ] {
+        let mut request = json!({"scope":"global","query":"consistency"});
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(invalid.as_object().unwrap().clone());
+        assert!(fixture.search(request).await.is_err());
+    }
+    assert!(fixture
+        .search(json!({"indexes":["docs"],"query":"consistency"}))
+        .await
+        .is_err());
 }

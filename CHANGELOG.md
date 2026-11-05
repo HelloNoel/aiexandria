@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — Unreleased
+
+- Recognize `.markdown` files, including uppercase extensions, in automatic search indexing and generated indexes.
+
+- Adopt Pinakes revision 2026-11-02: omitted `repo.submodules` now defaults to `false` in indexes and registries. Preserve explicit options in old cache records. Remote generation now requires `--submodules` to initialize nested repositories.
+
+- Continue indexing available sources after a repository acquisition fails, and identify the affected source in update errors.
+
+- Add `update --all` to prepare uncached sources across configured indexes or a selected subtree, optionally with `--semantic`; ordinary updates retain their existing scope.
+
+- Add global ranked search across indexed cached documentation, with index/source filters, deduplicated passages, per-hit source routes, explicit coverage and bounded work.
+
+- Add opt-in ranked passage search over cached documentation: SQLite keyword search, local embedding providers, semantic and hybrid modes, bounded results and revision-bound reads.
+- Discover generated cached repository sources and index available documentation in the background or with update --semantic [--cached-only]; preserve custom commands and legacy searches.
 
 - Use the Git CLI (2.43.7 or newer) for repository access; support SHA-1 and SHA-256 branches, tags, and commit pins.
 - Resolve commit pins as object IDs, reject non-commit objects, and retain resolved pins during forced updates and selective hydration. See the [Pinakes changelog](https://github.com/HelloNoel/pinakes/blob/main/CHANGELOG.md) for format compatibility.
@@ -8,6 +21,15 @@
 - Add aiexandria update with shared process locks, bounded acquisition concurrency, interactive priority, and manual/scheduled prewarming.
 - Fetch and materialize explicit document paths selectively. Preserve full command/submodule checkouts and run commands in independent copies.
 
+
+### Upgrade notes
+
+- Add explicit `submodules: true` to indexes and registries that rely on nested documentation before upgrading. Producers targeting older consumers should continue to emit an explicit boolean.
+
+- Install Git 2.43.7 or newer and make it available to the MCP process, or select it with --git / AIEXANDRIA_GIT. Release binaries now use the Git CLI instead of libgit2.
+- Existing registries and custom-command query languages are preserved. Ranked search requires an enabled search.yaml; no model or embedding service is installed automatically.
+- The cache layout changes. Frequently used sources can be prepared with aiexandria update; older caches remain available for rollback.
+- Global ranked search covers indexed cached documentation only. Missing metadata, pending embeddings and work limits are reported explicitly.
 
 ## 0.3.0 — 2026-10-29
 

@@ -68,13 +68,7 @@ impl GitCli {
             None,
             Instant::now() + self.timeout,
         )?;
-        let version = text.trim().strip_prefix("git version ").unwrap_or("");
-        let parts: Vec<u32> = version
-            .split('.')
-            .take(3)
-            .map(|v| v.parse().unwrap_or(0))
-            .collect();
-        if parts.len() < 3 || (parts[0], parts[1], parts[2]) < (2, 43, 7) {
+        if parse_git_version(&text).is_none_or(|version| version < (2, 43, 7)) {
             return Err(AIexError::Git("Git 2.43.7 or newer is required; install Git and check the MCP client's PATH or --git setting".into()));
         }
         Ok(text.trim().into())
@@ -352,6 +346,22 @@ impl GitCli {
     }
 }
 
+fn parse_git_version(output: &str) -> Option<(u32, u32, u32)> {
+    // Apple appends a space and build label; Git for Windows appends dot-separated
+    // build components. Compare only the three numeric upstream components.
+    let version = output
+        .trim()
+        .strip_prefix("git version ")?
+        .split_ascii_whitespace()
+        .next()?;
+    let mut parts = version.split('.');
+    Some((
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    ))
+}
+
 /// Git invokes this mode as a credential helper, never as an MCP tool.
 pub fn credential_helper(operation: &str) -> Result<()> {
     if operation != "get" {
@@ -403,5 +413,40 @@ pub(crate) struct Worker(Arc<AtomicUsize>);
 impl Drop for Worker {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_git_version;
+
+    #[test]
+    fn parses_upstream_versions_with_vendor_build_labels() {
+        for (output, expected) in [
+            ("git version 2.43.7\n", (2, 43, 7)),
+            ("git version 2.43.7 (Apple Git-999)\n", (2, 43, 7)),
+            ("git version 2.43.7.windows.1\r\n", (2, 43, 7)),
+            ("git version 2.43.0.windows.1", (2, 43, 0)),
+            ("git version 2.43.6 (Apple Git-999)", (2, 43, 6)),
+            ("git version 2.44.0", (2, 44, 0)),
+            ("git version 3.0.0", (3, 0, 0)),
+        ] {
+            assert_eq!(parse_git_version(output), Some(expected), "{output:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_missing_or_invalid_numeric_version_components() {
+        for output in [
+            "",
+            "2.43.7",
+            "git version ",
+            "git version 2.44",
+            "git version 2.44.invalid",
+            "git version 2..7",
+            "git version 2.43.4294967296",
+        ] {
+            assert_eq!(parse_git_version(output), None, "{output:?}");
+        }
     }
 }
