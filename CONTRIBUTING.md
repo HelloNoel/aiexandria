@@ -101,6 +101,13 @@ archives plus SHA256SUMS. Review the notes, checksums and native Windows results
 before publishing. Publishing deploys the user guide from that tag. Resolve
 failed platform checks before publishing the draft.
 
+After publishing, update the formula in
+[homebrew-tap](https://github.com/HelloNoel/homebrew-tap). Run
+`python3 scripts/update.py X.Y.Z` in the tap checkout to read the published
+release metadata and `SHA256SUMS`, then review, test, commit and push the
+formula. The tap's README documents the checks. Users receive the new version
+through `brew update` and `brew upgrade`.
+
 A source build needs Rust 1.89 or newer and a native C toolchain for SQLite/TLS.
 Tests also use git2 fixtures with vendored OpenSSL, which can require Perl and
 make. See .github/workflows/release.yml for the Windows GNU toolchain setup.

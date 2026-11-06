@@ -8,7 +8,17 @@ file, line and revision references.
 [Download v0.4.0](https://github.com/HelloNoel/aiexandria/releases/tag/v0.4.0) ·
 [User guide](docs/introduction.md)
 
-Install **Git 2.43.7 or newer** and AIexandria, then connect your MCP client.
+On Apple Silicon macOS or Linux with [Homebrew](https://brew.sh), install
+AIexandria and its Git dependency with:
+
+```sh
+brew install HelloNoel/tap/aiexandria
+```
+
+For Intel Macs and Windows, use the release downloads. See the
+[installation guide](docs/installation.md) for upgrades and MCP client setup.
+Manual installations need **Git 2.43.7 or newer**.
+
 With no registry configured, AIexandria provides a curated
 [public collection](https://github.com/HelloNoel/aiexandria-indexes) covering 20
 programming and infrastructure topics, plus help for the installed release. No

@@ -2,14 +2,49 @@
 
 ## Prerequisites
 
-Install [Git 2.43.7 or newer](https://git-scm.com/install/), then check
-`git --version`. Git must be available on the MCP process's PATH; GUI clients
-may use a different PATH from your terminal. You can select an absolute Git path
-with `--git` or `AIEXANDRIA_GIT`. This is a new runtime requirement in v0.4.0.
+AIexandria requires [Git 2.43.7 or newer](https://git-scm.com/install/). The
+Homebrew installation below installs Git automatically; for manual installs,
+install Git separately and check `git --version`. Git must be available on the
+MCP process's PATH; GUI clients may use a different PATH from your terminal. You
+can select an absolute Git path with `--git` or `AIEXANDRIA_GIT`. This is a new
+runtime requirement in v0.4.0.
 
 The default setup needs no embedding service, database installation or Git
 hosting account. Ripgrep is only required by sources whose custom commands
 invoke it. [Semantic search](semantic-search.md) is optional.
+
+## Install with Homebrew
+
+On Apple Silicon macOS or Linux with [Homebrew](https://brew.sh):
+
+```sh
+brew install HelloNoel/tap/aiexandria
+aiexandria --version
+```
+
+The [Homebrew tap](https://github.com/HelloNoel/homebrew-tap) selects the
+release binary for your operating system and CPU, verifies its checksum, and
+installs Git as a dependency. No Rust toolchain is needed. The binaries support
+macOS 11 or newer and Linux with glibc 2.35 or newer, on ARM64 and x86-64.
+Homebrew itself may require a newer operating system.
+
+Homebrew no longer provides prebuilt dependency packages for Intel macOS.
+Installing through the tap on Intel can therefore compile Git and its
+dependencies from source. For Intel Macs, we recommend the
+[macOS release download](#macos) with Git 2.43.7 or newer already installed.
+
+To upgrade:
+
+```sh
+brew update
+brew upgrade HelloNoel/tap/aiexandria
+```
+
+Restart your MCP client after upgrading. If a GUI client cannot find the
+executable, use the path printed by `brew --prefix aiexandria` followed by
+`/bin/aiexandria` in its configuration. Ensure the client can also find Git, or
+pass the Git path printed by `brew --prefix git` followed by `/bin/git` using
+`--git`.
 
 ## Download a binary
 
