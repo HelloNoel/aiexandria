@@ -1,7 +1,9 @@
 version: 1
-name: AIexandria v0.4.0
+name: AIexandria v0.5.0
 description: >
-  AIexandria v0.4.0 user guide: installation, public defaults, custom registries, ranked and global search, repository updates, and troubleshooting.
+  AIexandria v0.5.0 user guide: installation, public defaults, custom registries,
+  hybrid source discovery, ranked and global search, local embedding-provider
+  startup, repository updates, and troubleshooting.
 entries:
   - id: getting-started
     name: Getting started

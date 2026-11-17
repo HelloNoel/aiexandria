@@ -64,6 +64,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Start, inspect or stop the optional shared local embedding provider.
+    Embedding {
+        #[command(subcommand)]
+        action: EmbeddingAction,
+    },
     /// Refresh index metadata and cached sources; use --all to include uncached sources.
     Update {
         /// Prepare all referenced sources in scope, including uncached repositories.
@@ -73,6 +78,9 @@ enum Command {
         /// Prepare ranked search and configured embeddings as part of this update.
         #[arg(long)]
         semantic: bool,
+        /// Prepare source discovery metadata only; never scan document bodies.
+        #[arg(long, conflicts_with_all = ["all", "semantic", "cached_only", "path", "command_id", "force", "dry_run"])]
+        discovery: bool,
         /// With --semantic, index existing content without Git acquisition.
         #[arg(long, requires = "semantic", conflicts_with = "force")]
         cached_only: bool,
@@ -127,6 +135,16 @@ enum Command {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum EmbeddingAction {
+    /// Ensure the configured embedding API is ready; reuse an existing service.
+    Start,
+    /// Report provider readiness, ownership and the managed log location.
+    Status,
+    /// Stop only a provider owned by AIexandria's supervisor.
+    Stop,
+}
+
 fn cli_version() -> &'static str {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     VERSION
@@ -179,6 +197,13 @@ fn load_cache(cli: &Cli) -> Result<RepoCache> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("__embedding-supervisor") {
+        let path = std::env::args_os()
+            .nth(2)
+            .context("missing provider startup request")?;
+        aiexandria::search::lifecycle::supervise(std::path::Path::new(&path))?;
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("__git-credential") {
         aiexandria::git_cli::credential_helper(&std::env::args().nth(2).unwrap_or_default())?;
         return Ok(());
@@ -218,9 +243,34 @@ async fn main() -> Result<()> {
 
 async fn run_subcommand(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
+        Command::Embedding { action } => {
+            let embedding = aiexandria::search::config::SearchConfig::load_embedding(
+                cli.search_config.as_deref(),
+            )?
+            .context("configure embedding in search.yaml")?;
+            let result = match action {
+                EmbeddingAction::Start => {
+                    let timeout = embedding
+                        .startup
+                        .as_ref()
+                        .map_or(embedding.timeout_secs, |s| s.timeout_secs);
+                    aiexandria::search::lifecycle::ensure_started(
+                        &embedding,
+                        std::time::Instant::now() + std::time::Duration::from_secs(timeout),
+                        true,
+                    )?;
+                    aiexandria::search::lifecycle::status(&embedding)?
+                }
+                EmbeddingAction::Status => aiexandria::search::lifecycle::status(&embedding)?,
+                EmbeddingAction::Stop => aiexandria::search::lifecycle::stop(&embedding)?,
+            };
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
         Command::Update {
             all,
             semantic,
+            discovery,
             cached_only,
             index,
             path,
@@ -239,6 +289,29 @@ async fn run_subcommand(cli: &Cli, cmd: &Command) -> Result<()> {
                 .map_err(Into::into),
             );
             let cache = usage(load_cache(cli));
+            if *discovery {
+                let config = usage(
+                    aiexandria::search::config::SearchConfig::load(cli.search_config.as_deref())
+                        .map_err(Into::into)
+                        .and_then(|c| {
+                            c.context("enable search in search.yaml before using --discovery")
+                        }),
+                );
+                let result = aiexandria::discovery::prepare_metadata(
+                    registry,
+                    cache,
+                    config,
+                    index.clone(),
+                    *wait,
+                    usage(humantime::parse_duration(timeout).map_err(Into::into)),
+                )
+                .await?;
+                println!("{}", serde_json::to_string(&result)?);
+                if result["status"] != "ready" {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
             let options = aiexandria::update::UpdateOptions {
                 all: *all,
                 semantic: if *semantic {

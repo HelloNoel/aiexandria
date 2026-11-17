@@ -1,7 +1,7 @@
 # Getting started
 
 This guide takes you from installation to reading a real document with
-AIexandria v0.4.0. The public starter collection requires no Git hosting account
+AIexandria v0.5.0. The public starter collection requires no Git hosting account
 or search service.
 
 ## 1. Install
@@ -10,7 +10,7 @@ Install [Git 2.43.7 or newer](https://git-scm.com/install/) and make sure it is
 on your MCP client's PATH. Check it with `git --version`.
 
 Download your platform's archive from the
-[v0.4.0 release](https://github.com/HelloNoel/aiexandria/releases/tag/v0.4.0),
+[v0.5.0 release](https://github.com/HelloNoel/aiexandria/releases/tag/v0.5.0),
 extract it, and put the executable on PATH. See [installation](installation.md)
 for platform-specific commands and checksum verification.
 
@@ -18,9 +18,9 @@ for platform-specific commands and checksum verification.
 aiexandria --version
 ```
 
-The output should report 0.4.0. Version 0.4.0 adds the Git CLI backend,
-repository updates and optional ranked search; discovery and the starter
-collection were introduced in v0.3.0.
+The output should report 0.5.0. This release adds hybrid source discovery,
+optional embedding-provider startup and explicit semantic-search failures. The
+public starter collection works without an embedding provider.
 
 ## 2. Connect your assistant
 
@@ -61,7 +61,7 @@ A precise tool-level check uses read_doc with:
 }
 ```
 
-It should return this guide and identify v0.4.0. The first call may wait while
+It should return this guide and identify v0.5.0. The first call may wait while
 AIexandria acquires its help repository.
 
 Then try:

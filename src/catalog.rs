@@ -47,6 +47,9 @@ pub(crate) struct Source {
     pub name: String,
     pub description: String,
     pub description_complete: bool,
+    /// Canonical bounded metadata, independent of the displayed summary.
+    pub embedding_text: String,
+    pub metadata_truncated: bool,
     pub terms: BTreeMap<String, f64>,
     pub length: f64,
     pub normalized_name: String,
@@ -66,6 +69,7 @@ impl Source {
     ) -> Self {
         let identity =
             serde_json::to_vec(&(kind, &route)).expect("source identity is serializable");
+        let (embedding_text, metadata_truncated) = metadata_text(name, description, context, docs);
         let name = clip(name, 512);
         let description_complete = description.chars().count() <= 4096;
         let description = clip(description, 4096);
@@ -91,6 +95,8 @@ impl Source {
             name,
             description,
             description_complete,
+            embedding_text,
+            metadata_truncated,
             terms,
             length,
             normalized_name,
@@ -102,6 +108,7 @@ impl Source {
         self.id.len()
             + self.name.len()
             + self.description.len()
+            + self.embedding_text.len()
             + self.normalized_name.len()
             + self.route.index.len()
             + self.route.path.iter().map(|s| s.len() + 24).sum::<usize>()
@@ -109,6 +116,35 @@ impl Source {
             + self.terms.keys().map(|s| s.len() + 96).sum::<usize>()
             + 512
     }
+}
+
+/// Source metadata template v1. Byte quotas keep inherited context from drowning
+/// out the source's own topic and fit the small local embedding models we use.
+fn metadata_text(name: &str, description: &str, context: &str, docs: &str) -> (String, bool) {
+    let mut text = String::new();
+    let mut truncated = false;
+    let mut seen = BTreeSet::new();
+    for (label, value, budget) in [
+        ("Source", name, 256),
+        ("Description", description, 1000),
+        ("Context", context, 256),
+        ("Documents", docs, 384),
+    ] {
+        let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        if normalized.is_empty() || !seen.insert(normalized.clone()) {
+            continue;
+        }
+        let mut end = normalized.len().min(budget);
+        while !normalized.is_char_boundary(end) {
+            end -= 1;
+        }
+        truncated |= end < normalized.len();
+        text.push_str(label);
+        text.push_str(": ");
+        text.push_str(&normalized[..end]);
+        text.push('\n');
+    }
+    (text, truncated)
 }
 
 pub(crate) fn clip(value: &str, chars: usize) -> String {

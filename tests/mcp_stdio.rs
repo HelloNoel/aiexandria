@@ -103,7 +103,11 @@ fn mcp_stdio_round_trip() {
     );
 
     let bin = env!("CARGO_BIN_EXE_aiexandria");
+    let search_config = tmp.path().join("search.yaml");
+    write(&search_config, "enabled: false\n");
     let mut child = Command::new(bin)
+        .arg("--search-config")
+        .arg(&search_config)
         .arg("--registry")
         .arg(&registry)
         .arg("--cache")
@@ -267,7 +271,7 @@ fn mcp_stdio_round_trip() {
     send(
         &mut stdin,
         json!({"jsonrpc":"2.0", "id":11, "method":"tools/call",
-        "params":{"name":"search_docs", "arguments":{"index":"smoke", "query":"README"}}}),
+        "params":{"name":"search_docs", "arguments":{"index":"smoke", "query":"README", "deep":true}}}),
     );
     let search = read_response(&mut stdout, deadline);
     let hits: Value = serde_json::from_str(structured_text(&search)).unwrap();

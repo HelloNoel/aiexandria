@@ -23,6 +23,29 @@ command entry ID; this prepares the complete repository, required submodules,
 and a command copy without executing the search. Use the same registry, auth,
 cache and Git options as your MCP server.
 
+## Prepare discovery metadata
+
+Use this when you want source discovery ready before searching documents:
+
+```sh
+aiexandria update --discovery --wait --timeout 5m
+aiexandria update --discovery --index public-docs --wait --timeout 5m
+```
+
+This loads index metadata and prepares source-description embeddings using the
+enabled search configuration. It does not index document bodies, run source
+commands, or acquire repositories referenced only as content sources. No
+embedding provider means the report identifies semantic preparation as not
+configured. The command always prints JSON; check its status and catalog/vector
+coverage. Incomplete preparation returns a nonzero exit code.
+
+Without `--wait`, the command makes bounded progress; rerun it or use `--wait`
+to finish. It accepts `--index` and `--timeout`. Combining `--discovery` with
+`--all`, `--semantic`, `--cached-only`, `--path`, `--command-id`, `--force` or
+`--dry-run` is rejected to keep metadata preparation distinct from document
+acquisition. [Source discovery](source-discovery.md) explains the modes and
+keyword opt-out.
+
 ## Prepare all sources
 
 For initial setup, prepare the sources you expect to use. To include every
@@ -33,7 +56,7 @@ referenced repository, even those you have never opened, use `--all`:
 aiexandria update --all --index public-docs --wait --timeout 30m
 
 # Prepare every configured registry root and build the search index.
-# Requires ranked search configured, and its embedding provider running if set.
+# Requires ranked search; a configured local provider can start automatically.
 aiexandria update --all --semantic --wait --timeout 30m
 ```
 

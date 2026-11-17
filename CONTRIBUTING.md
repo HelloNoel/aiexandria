@@ -30,8 +30,9 @@ Windows. Process and path changes need Windows checks.
 
 catalog.rs builds metadata from index/merge routes without acquiring
 repositories referenced only by documents or commands. discovery.rs ranks
-lexical metadata and creates bounded temporary pagination snapshots. Default
-output is 5 results and 8192 bytes. Catalog acquisition has a 1.5-second
+metadata with keyword, semantic or hybrid search and creates bounded temporary
+pagination snapshots. Metadata vectors have a separate incremental cache.
+Default output is 5 results and 8192 bytes. Catalog acquisition has a 1.5-second
 foreground wait and reports incomplete coverage explicitly.
 
 Source IDs identify routes, not frozen permissions. Search re-resolves routes
@@ -55,7 +56,8 @@ Scoped and global requests revalidate current authority before querying a
 consistent database snapshot. Global search filters and deduplicates the
 eligible union before ranking, with bounded work and output. It does not acquire
 missing Git content or synchronously build document embeddings. Preserve the
-legacy search path when mode is omitted.
+legacy search path for explicit custom commands and `deep: true`. Omitted mode
+otherwise selects auto: hybrid with a provider, keyword without one.
 
 Background indexing and update --semantic share embedding locks, incremental
 vector reuse and query priority. Corpus configuration is separate from Pinakes.
@@ -65,11 +67,11 @@ follow-up reads when changing this subsystem.
 
 ## Current limits and direction
 
-Prioritize useful evidence and easy maintenance. Discovery is lexical, with no
-general relevance threshold. Ranked passage search has result and byte budgets;
-legacy custom commands keep their own output limits. Neither semantic ranks nor
-hybrid scores prove that the corpus answers a question. Exact vector search is
-bounded, not an approximate index for arbitrary corpus sizes.
+Prioritize useful evidence and easy maintenance. Discovery ranks metadata, with
+no general relevance threshold. Ranked passage search has result and byte
+budgets; legacy custom commands keep their own output limits. Neither semantic
+ranks nor hybrid scores prove that the corpus answers a question. Exact vector
+search is bounded, not an approximate index for arbitrary corpus sizes.
 
 Evaluate larger collections and version-sensitive questions before adding ANN,
 reranking or cross-backend federation. Measure useful reads, output size,

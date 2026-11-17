@@ -3,8 +3,8 @@
 ## CLI
 
 Running without a subcommand starts the MCP stdio server. Use
-`aiexandria --help`, `aiexandria update --help` and `aiexandria generate --help`
-for installed options.
+`aiexandria --help`, `aiexandria update --help`, `aiexandria embedding --help`
+and `aiexandria generate --help` for installed options.
 
 | Option                    | Environment variable       | Purpose                                                |
 | ------------------------- | -------------------------- | ------------------------------------------------------ |
@@ -26,6 +26,12 @@ it respects refresh intervals and does not execute custom commands. Add
 `--semantic` to update the passage index, and `--cached-only` to skip Git work.
 Those last two flags require ranked search to be enabled. `--cached-only` cannot
 be combined with `--force` or `--all`.
+
+Use `update --discovery --wait` to prepare metadata embeddings without indexing
+document bodies or acquiring repositories referenced only by content entries.
+Use `embedding start`, `embedding status` and `embedding stop` to manage an
+optional local provider configured in `embedding.startup`. See
+[provider startup](semantic-search.md#start-a-local-provider-automatically).
 
 `generate` also leaves remote submodules uninitialized by default; pass
 `--submodules` to opt in. See [writing indexes](writing-indexes.md).
@@ -58,34 +64,37 @@ the configured indexes.
 
 ## Search modes and scope
 
-A source search accepts either `source_id` or an `index`/`path`/`command_id`
-route. Do not combine those forms.
+| Request                                             | Behavior                                                 |
+| --------------------------------------------------- | -------------------------------------------------------- |
+| Omit `mode`, or `mode: auto`                        | Hybrid with a configured provider, keyword otherwise     |
+| Explicit custom-command route without a ranked mode | Preserve the command's query syntax                      |
+| `deep: true` without a ranked mode                  | Legacy substring/document search                         |
+| `mode: keyword`                                     | Rank passages by word matches with SQLite FTS5/BM25      |
+| `mode: semantic`                                    | Rank by embedding similarity; requires a provider        |
+| `mode: hybrid`                                      | Combine keyword and vector rankings; requires a provider |
 
-| Request                                 | Behavior                                                                                       |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Omit `mode` on an existing source route | Preserve substring or custom-command search; `deep: true` reads listed current-level documents |
-| `mode: keyword`                         | Rank passages by word matches with SQLite FTS5/BM25                                            |
-| `mode: semantic`                        | Rank by embedding similarity; requires an embedding provider                                   |
-| `mode: hybrid`                          | Combine keyword and vector rankings, falling back to keyword when needed                       |
+Ranked passage search requires [search configuration](semantic-search.md). It
+accepts `limit` (1–20, default 5) and `max_output_bytes` (1024–32768, default
+8192). Discovery advertises `search_modes` and readiness. Repository sources
+have a separate `source_id`; their file scope is independent of custom commands.
 
-The three ranked modes require [search configuration](semantic-search.md). They
-accept `limit` (1–20, default 5) and `max_output_bytes` (1024–32768, default
-8192). Discovery advertises `search_modes` and readiness. Generated cached
-repository sources have a separate `source_id` and select hybrid by default with
-a provider, keyword otherwise. Their file scope is independent of custom
-commands.
-
-Use `scope: global` to rank the union of eligible indexed cached documentation.
-Optional `indexes` and `source_ids` arrays restrict the search, with up to 64
+Omit the source, or use `scope: global`, to rank eligible indexed cached
+documentation. Optional `indexes` and `source_ids` filters accept up to 64
 entries each. Global requests cannot be combined with singular source routes,
 `deep` or `require_fresh`. They perform no Git work or custom-command execution.
 See [global search](semantic-search.md#search-globally) for work limits, missing
 coverage and per-hit source routes.
 
-Ranked responses identify `mode_used`, semantic readiness, coverage and
-truncation. Use each hit's `read` route, file and line range with the returned
-snapshot token to read the evidence. Rankings are candidates, not confidence
-estimates.
+Semantic and hybrid requests fail with MCP `isError` when the provider fails;
+incomplete embeddings return `status: preparing`. Explicit `fallback: keyword`
+permits degraded results with a warning. Responses report requested and used
+modes, semantic readiness, coverage and truncation. Use each hit's `read` route,
+file and line range with its snapshot token to inspect the evidence.
+
+`discover_sources` supports the same `auto`, `keyword`, `semantic` and `hybrid`
+modes and explicit keyword fallback. Discovery ranks metadata using its own
+cached vectors; it does not search document bodies. Set
+`discovery.default_mode: keyword` to opt out of automatic hybrid discovery.
 
 ## Acquisition and snapshots
 

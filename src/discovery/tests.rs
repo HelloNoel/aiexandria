@@ -9,15 +9,15 @@ use crate::resolver::{Resolver, TraversalBudget};
 use serde_json::{json, Value};
 use std::path::Path;
 
-struct Fixture {
+pub(super) struct Fixture {
     _temp: tempfile::TempDir,
-    repo: git2::Repository,
-    registry: Arc<RegistryConfig>,
-    cache: Arc<RepoCache>,
-    service: DiscoveryService,
+    pub(super) repo: git2::Repository,
+    pub(super) registry: Arc<RegistryConfig>,
+    pub(super) cache: Arc<RepoCache>,
+    pub(super) service: DiscoveryService,
 }
 
-fn commit(repo: &git2::Repository) {
+pub(super) fn commit(repo: &git2::Repository) {
     let mut index = repo.index().unwrap();
     index
         .add_all(["."], git2::IndexAddOption::DEFAULT, None)
@@ -37,14 +37,14 @@ fn commit(repo: &git2::Repository) {
     .unwrap();
 }
 
-fn write(root: &Path, path: &str, body: &str) {
+pub(super) fn write(root: &Path, path: &str, body: &str) {
     let path = root.join(path);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, body).unwrap();
 }
 
 impl Fixture {
-    fn new(files: &[(&str, &str)], failed_root: bool, refresh: RefreshSetting) -> Self {
+    pub(super) fn new(files: &[(&str, &str)], failed_root: bool, refresh: RefreshSetting) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path().join("repo");
         std::fs::create_dir_all(&dir).unwrap();
@@ -408,6 +408,7 @@ fn byte_bounded_pages_preserve_unicode_and_every_locator() {
         generation: 1,
         limited: false,
         bytes: 0,
+        retrieval: json!({}),
     };
     let mut offset = 0;
     let mut ids = BTreeSet::new();

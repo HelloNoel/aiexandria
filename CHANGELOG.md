@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.5.0 — 2026-11-17
+
+- Prefer ranked natural-language search: omitted mode selects auto (hybrid with
+  a configured provider, otherwise keyword), and omitting a source selects
+  global cached search. Preserve explicit custom-command routes and legacy deep
+  search. Discovery recommends ranked alternatives and exposes repository routes
+  before their content is cached.
+- Make semantic and hybrid searches strict by default. Provider failures return
+  MCP tool errors with actionable diagnostics; incomplete embeddings return
+  preparing. Explicit `fallback: keyword` returns degraded keyword results with
+  a warning. Text and structured responses share the same contract.
+- Add optional local `embedding.startup` configuration and `embedding start`,
+  `status` and `stop` commands. Cross-process admission and lifetime locks
+  prevent duplicate models, reuse healthy external providers, and avoid
+  signalling stale PIDs. Managed providers outlive individual clients and have
+  bounded logs.
+- Add semantic/hybrid source discovery over separately cached metadata vectors.
+  Default auto prefers hybrid with a configured provider; keyword is an opt-out.
+  Reuse unchanged vectors across clients and refreshes, share preparation with
+  cross-process locks, preserve cursor rankings, and expose strict failures or
+  explicit keyword fallback in both MCP response formats.
+- Add `update --discovery --wait` to prepare source metadata without indexing
+  document bodies or acquiring content-only repositories.
+- Preserve document/vector caches when startup or discovery defaults change.
+  Listing and keyword search/discovery do not start a model; successful provider
+  recovery can clear cached connection failures immediately.
+
+### Upgrade notes
+
+- Clients relying on metadata substring search should use `list_docs`, or
+  `deep: true` for legacy substring/document search. Ranked requests require an
+  enabled `search.yaml`; explicit custom commands still work without it.
+- Clients relying on automatic hybrid fallback must request `fallback: keyword`
+  and handle `status: degraded`. Check MCP `isError` for provider failures and
+  respect retry guidance for `preparing` responses.
+- Startup commands are optional and read only from local search configuration.
+  Install the provider and model separately; no model downloads are automatic.
+- Discovery now uses embeddings when a provider is configured and can start its
+  configured local provider. Set `discovery.default_mode: keyword` in
+  `search.yaml`, or request `mode: keyword`, to retain lexical discovery.
+  Discovery mode describes metadata ranking; it does not change source command
+  syntax or imply document evidence.
+
 ## 0.4.0 — 2026-11-05
 
 - Include document, listing, and legacy search output in structured MCP
