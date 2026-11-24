@@ -198,6 +198,20 @@ fn existing_external_provider_is_reused_and_never_stopped() {
 }
 
 #[test]
+fn unresponsive_external_provider_is_not_replaced() {
+    let fixture = Fixture::new(0);
+    let port = url::Url::parse(&fixture.endpoint).unwrap().port().unwrap();
+    // Keep the port open without responding to HTTP. A timeout is not evidence
+    // that the port is unused and must never authorize launching another model.
+    let _listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let result = fixture.cli("start");
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("exceeded the request timeout"), "{stderr}");
+    assert_eq!(fixture.started(), 0);
+}
+
+#[test]
 fn failed_startup_is_reported_and_releases_ownership() {
     let fixture = Fixture::new(0);
     let mut config: Value =

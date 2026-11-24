@@ -18,7 +18,9 @@ use crate::cache::{atomic_json, now_ms, try_lock};
 use crate::error::{AIexError, Result};
 
 const POLL: Duration = Duration::from_millis(100);
-const PROBE: Duration = Duration::from_secs(1);
+// Windows retries refused loopback connections for about a second. Allow the
+// refusal to arrive: a generic timeout must not authorize another model.
+const PROBE: Duration = Duration::from_secs(3);
 const FAILURE_BACKOFF_MS: u64 = 30_000;
 
 #[derive(Serialize, Deserialize)]
