@@ -34,7 +34,7 @@ public-docs:
 aiexandria:
   repo:
     url: https://github.com/HelloNoel/aiexandria.git
-    tag: v0.4.0
+    tag: v0.5.0
     submodules: false
   path: docs/pinakes.yaml
   refresh: never

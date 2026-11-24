@@ -10,6 +10,7 @@ use crate::error::{AIexError, Result};
 pub struct SearchConfig {
     pub enabled: bool,
     pub embedding: Option<EmbeddingConfig>,
+    pub discovery: DiscoveryConfig,
     pub include: Vec<String>,
     pub exclude: Vec<String>,
     pub sources: Vec<SourceRule>,
@@ -27,6 +28,7 @@ impl Default for SearchConfig {
         Self {
             enabled: false,
             embedding: None,
+            discovery: DiscoveryConfig::default(),
             include: Vec::new(),
             exclude: Vec::new(),
             sources: Vec::new(),
@@ -37,6 +39,20 @@ impl Default for SearchConfig {
             global_max_sources: 128,
             global_max_chunks: 50000,
             global_timeout_secs: 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DiscoveryConfig {
+    pub default_mode: super::Mode,
+}
+
+impl Default for DiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            default_mode: super::Mode::Auto,
         }
     }
 }
@@ -70,6 +86,22 @@ pub struct EmbeddingConfig {
     pub document_prefix: String,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+    /// Only trusted local configuration can opt into starting a provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup: Option<StartupConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartupConfig {
+    /// Executable and literal arguments; no shell or repository interpolation.
+    pub argv: Vec<String>,
+    #[serde(default = "startup_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn startup_timeout() -> u64 {
+    60
 }
 
 fn default_timeout() -> u64 {
@@ -85,6 +117,15 @@ pub enum Provider {
 
 impl SearchConfig {
     pub fn load(path: Option<&Path>) -> Result<Option<Self>> {
+        Ok(Self::read(path)?.filter(|config| config.enabled))
+    }
+
+    /// Operator commands remain available after ranked search is disabled.
+    pub fn load_embedding(path: Option<&Path>) -> Result<Option<EmbeddingConfig>> {
+        Ok(Self::read(path)?.and_then(|config| config.embedding))
+    }
+
+    fn read(path: Option<&Path>) -> Result<Option<Self>> {
         let explicit = path.is_some();
         let path: Option<PathBuf> = path
             .map(Path::to_path_buf)
@@ -98,7 +139,7 @@ impl SearchConfig {
         let config: Self = serde_yaml::from_str(&body)
             .map_err(|e| AIexError::Other(format!("invalid search configuration: {e}")))?;
         config.validate()?;
-        Ok(config.enabled.then_some(config))
+        Ok(Some(config))
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -164,6 +205,17 @@ impl SearchConfig {
                 || embedding.token_env.as_ref().is_some_and(|s| s.is_empty())
             {
                 return Err(AIexError::Other("embedding model and revision are required; timeout must be 1–120 seconds and prefixes at most 512 bytes".into()));
+            }
+            if let Some(startup) = &embedding.startup {
+                if !local
+                    || startup.argv.first().is_none_or(|s| s.trim().is_empty())
+                    || startup.argv.len() > 256
+                    || startup.argv.iter().map(String::len).sum::<usize>() > 65536
+                    || startup.argv.iter().any(|s| s.contains('\0'))
+                    || !(1..=300).contains(&startup.timeout_secs)
+                {
+                    return Err(AIexError::Other("embedding startup requires a loopback endpoint, a nonempty argv (at most 256 arguments/64 KiB), and timeout_secs 1–300".into()));
+                }
             }
         }
         Ok(())

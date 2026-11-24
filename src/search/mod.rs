@@ -3,12 +3,15 @@ mod chunk;
 pub mod config;
 pub(crate) mod corpus;
 pub(crate) mod global;
-mod provider;
+pub mod lifecycle;
+pub(crate) mod provider;
+pub(crate) mod response;
 mod store;
 #[cfg(test)]
 mod tests;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -25,9 +28,32 @@ use corpus::{Corpus, Descriptor};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
+    Auto,
     Keyword,
     Hybrid,
     Semantic,
+}
+
+impl Mode {
+    pub fn resolve(self, embeddings: bool) -> Self {
+        if self == Self::Auto {
+            if embeddings {
+                Self::Hybrid
+            } else {
+                Self::Keyword
+            }
+        } else {
+            self
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Fallback {
+    #[default]
+    None,
+    Keyword,
 }
 
 struct Inner {
@@ -38,6 +64,7 @@ struct Inner {
     locks: PathBuf,
     wake: Mutex<bool>,
     condition: Condvar,
+    embedding_demand: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -76,8 +103,15 @@ impl SearchService {
             "global_max_sources",
             "global_max_chunks",
             "global_timeout_secs",
+            "discovery",
         ] {
             corpus_config.as_object_mut().unwrap().remove(field);
+        }
+        if let Some(embedding) = corpus_config
+            .get_mut("embedding")
+            .and_then(Value::as_object_mut)
+        {
+            embedding.remove("startup");
         }
         let identity = chunk::digest(serde_json::to_vec(&(&*registry, corpus_config)).unwrap());
         let locks = cache.root().join("search");
@@ -91,6 +125,7 @@ impl SearchService {
                 locks,
                 wake: Mutex::new(true),
                 condition: Condvar::new(),
+                embedding_demand: AtomicBool::new(false),
             }),
         })
     }
@@ -102,9 +137,13 @@ impl SearchService {
         std::thread::spawn(move || {
             while let Some(inner) = weak.upgrade() {
                 let service = Self { inner };
-                if let Err(error) =
-                    service.update(None, &[], None, Instant::now() + Duration::from_secs(120))
-                {
+                if let Err(error) = service.update_inner(
+                    None,
+                    &[],
+                    None,
+                    Instant::now() + Duration::from_secs(120),
+                    service.inner.embedding_demand.load(Ordering::Acquire),
+                ) {
                     tracing::warn!(%error, "cached search indexing failed");
                 }
                 let guard = service.inner.wake.lock().unwrap();
@@ -128,52 +167,68 @@ impl SearchService {
         self.inner.condition.notify_one();
     }
 
+    fn request_embeddings(&self) {
+        self.inner.embedding_demand.store(true, Ordering::Release);
+        self.wake();
+    }
+
     pub fn descriptor(&self, id: &str) -> Result<Descriptor> {
-        self.inner.store.descriptor(id)?.ok_or_else(|| {
-            AIexError::Other("cached source is unavailable; repeat discovery".into())
-        })
+        // Validate authority against current registered metadata even when the
+        // source has no stored corpus yet or its old anchor was removed.
+        if let Some(source) = self.sources().into_iter().find(|source| source.id == id) {
+            return Ok(source);
+        }
+        // Keep the current indexed route available if the bounded metadata
+        // inventory ran out of time; preparation revalidates its anchor again.
+        if let Some(source) = self.inner.store.descriptor(id)? {
+            if self.supports(&source.route.index, &source.route.path) {
+                return Ok(source);
+            }
+        }
+        Err(AIexError::Other(
+            "repository source is unavailable; repeat discovery".into(),
+        ))
     }
 
     pub fn sources(&self) -> Vec<Descriptor> {
+        let deadline = Instant::now() + Duration::from_millis(300);
         let cache = self
             .inner
             .cache
-            .session(
-                Freshness::CachedOk,
-                Instant::now() + Duration::from_millis(300),
-            )
+            .session(Freshness::CachedOk, deadline)
             .cached_only();
-        self.inner
-            .store
-            .descriptors()
-            .unwrap_or_default()
+        corpus::registered(&cache, &self.inner.registry, deadline)
+            .sources
             .into_iter()
             .filter(|source| {
-                if !self.supports(&source.route.index, &source.route.path) {
-                    return false;
-                }
-                let Some(expected) = &source.repo else {
-                    return false;
-                };
-                if self
-                    .coverage(&source.id)
-                    .is_none_or(|coverage| coverage.indexed_files == 0)
-                {
-                    return false;
-                }
-                corpus::level(
-                    &cache,
-                    &self.inner.registry,
-                    &source.route.index,
-                    &source.route.path,
-                )
-                .is_ok_and(|level| {
-                    level
-                        .find(&source.route.entry_id)
-                        .is_some_and(|e| &e.origin == expected)
-                })
+                source.repo.is_some() && self.supports(&source.route.index, &source.route.path)
             })
             .collect()
+    }
+
+    pub(crate) fn ranked_alternative(
+        &self,
+        route: &crate::catalog::SourceRoute,
+    ) -> Option<Descriptor> {
+        let command = route.command_id.as_ref()?;
+        if !self.supports(&route.index, &route.path) {
+            return None;
+        }
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let cache = self
+            .inner
+            .cache
+            .session(Freshness::CachedOk, deadline)
+            .cached_only();
+        let level = corpus::level(&cache, &self.inner.registry, &route.index, &route.path).ok()?;
+        let entry = level.find(command)?;
+        Some(Descriptor::repository(
+            &route.index,
+            &route.path,
+            command,
+            &entry.origin,
+            &level,
+        ))
     }
 
     pub fn has_embeddings(&self) -> bool {
@@ -255,6 +310,17 @@ impl SearchService {
         command: Option<&str>,
         deadline: Instant,
     ) -> Result<UpdateReport> {
+        self.update_inner(index, path, command, deadline, true)
+    }
+
+    fn update_inner(
+        &self,
+        index: Option<&str>,
+        path: &[String],
+        command: Option<&str>,
+        deadline: Instant,
+        embed: bool,
+    ) -> Result<UpdateReport> {
         let cache = self
             .inner
             .cache
@@ -331,6 +397,9 @@ impl SearchService {
                 Err(error) => report.errors.push(error.to_string()),
             }
         }
+        if !embed {
+            return Ok(report);
+        }
         let Some(provider) = &self.inner.config.embedding else {
             self.inner.store.collect_vectors(None)?;
             return Ok(report);
@@ -351,8 +420,26 @@ impl SearchService {
         self.inner.store.collect_vectors(Some(&model))?;
         for id in prepared {
             if let Some(error) = self.inner.store.failure(&id, &model)? {
-                report.errors.push(error);
-                continue;
+                // A provider may have just been started outside this process.
+                // Successful readiness overrides the old 30-second failure.
+                match lifecycle::ensure_started(
+                    provider,
+                    deadline.min(Instant::now() + Duration::from_secs(provider.timeout_secs)),
+                    false,
+                ) {
+                    Ok(()) => self.inner.store.set_failure(&id, &model, None)?,
+                    Err(_) => {
+                        let diagnostic = provider::cached_diagnostic(&error);
+                        if diagnostic["code"] == "provider_starting" {
+                            report.pending_sources += 1;
+                        } else {
+                            report
+                                .errors
+                                .push(diagnostic["message"].as_str().unwrap_or(&error).into());
+                        }
+                        continue;
+                    }
+                }
             }
             loop {
                 let missing = self.inner.store.missing(&id, &model, 8)?;
@@ -374,15 +461,25 @@ impl SearchService {
                 let keys: Vec<_> = missing.iter().map(|(key, _)| key.clone()).collect();
                 let inputs: Vec<_> = missing.into_iter().map(|(_, input)| input).collect();
                 match provider
-                    .embed(&inputs, false)
+                    .embed_with_timeout(
+                        &inputs,
+                        false,
+                        deadline.saturating_duration_since(Instant::now()),
+                    )
                     .and_then(|vectors| self.inner.store.insert_vectors(&model, &keys, &vectors))
                 {
                     Ok(()) => report.embedded_chunks += keys.len(),
                     Err(error) => {
-                        self.inner
-                            .store
-                            .set_failure(&id, &model, Some(&error.to_string()))?;
-                        report.errors.push(error.to_string());
+                        self.inner.store.set_failure(
+                            &id,
+                            &model,
+                            Some(&provider::diagnostic(&error).to_string()),
+                        )?;
+                        if provider::diagnostic(&error)["code"] == "provider_starting" {
+                            report.pending_sources += 1;
+                        } else {
+                            report.errors.push(error.to_string());
+                        }
                         break;
                     }
                 }
@@ -394,23 +491,42 @@ impl SearchService {
 
 impl Prepared {
     pub fn execute(&self, query: &str, mode: Mode, limit: usize) -> Result<Value> {
+        self.execute_with_fallback(query, mode, limit, Fallback::None)
+    }
+
+    pub fn execute_with_fallback(
+        &self,
+        query: &str,
+        requested: Mode,
+        limit: usize,
+        fallback: Fallback,
+    ) -> Result<Value> {
         let inner = &self.service.inner;
+        let mode = requested.resolve(inner.config.embedding.is_some());
         let id = &self.corpus.descriptor.id;
-        let mut semantic = json!({"status":"not_configured","message":"Configure an embedding provider in search.yaml to enable semantic retrieval."});
+        let mut semantic = json!({"status":"not_configured"});
         let mut used = Mode::Keyword;
         let mut embedding = None;
         let mut model = String::new();
         if mode != Mode::Keyword {
             if let Some(provider) = &inner.config.embedding {
                 model = provider.identity();
-                let missing = !inner.store.missing(id, &model, 1)?.is_empty();
-                if missing {
-                    semantic = if let Some(error) = inner.store.failure(id, &model)? {
-                        json!({"status":"unavailable","message":error})
-                    } else {
-                        json!({"status":"preparing","retry_after_ms":2000})
-                    };
-                    self.service.wake();
+                if !inner.store.missing(id, &model, 1)?.is_empty() {
+                    semantic = json!({"status":"preparing"});
+                    if let Some(error) = inner.store.failure(id, &model)? {
+                        if provider.probe(Duration::from_secs(1)).is_ok() {
+                            inner.store.set_failure(id, &model, None)?;
+                        } else {
+                            semantic = provider::cached_diagnostic(&error);
+                            semantic["status"] =
+                                json!(if semantic["code"] == "provider_starting" {
+                                    "preparing"
+                                } else {
+                                    "unavailable"
+                                });
+                        }
+                    }
+                    self.service.request_embeddings();
                 } else if self.corpus.coverage.indexed_files > 0 {
                     let priority = lock_file(&inner.locks.join("query-priority.lock"))?;
                     priority.lock_shared()?;
@@ -423,42 +539,44 @@ impl Prepared {
                             semantic = json!({"status":"ready"});
                         }
                         Ok(_) => {
-                            semantic = json!({"status":"unavailable","message":"Embedding dimensions changed; configure a new model revision."})
+                            semantic = json!({"status":"unavailable", "code":"model_mismatch", "retryable":false, "message":"Embedding dimensions changed; configure a new model revision."})
                         }
                         Err(error) => {
-                            semantic = json!({"status":"unavailable","message":error.to_string()})
+                            semantic = provider::diagnostic(&error);
+                            semantic["status"] =
+                                json!(if semantic["code"] == "provider_starting" {
+                                    "preparing"
+                                } else {
+                                    "unavailable"
+                                });
                         }
                     }
+                } else {
+                    semantic = json!({"status":"empty"});
+                    used = mode;
                 }
             }
         }
-        if mode == Mode::Semantic && embedding.is_none() && self.corpus.coverage.indexed_files > 0 {
-            let status = if semantic["status"] == "preparing" {
-                "preparing"
-            } else {
-                "unavailable"
-            };
-            let mut response = json!({"status":status,"phase":"semantic_index","semantic":semantic,"coverage":self.corpus.coverage,"hits":[]});
-            if status == "preparing" {
-                response["retry_after_ms"] = json!(2000);
-            }
-            return Ok(response);
-        }
-        let mut hits = inner.store.query(
-            &self.corpus,
-            query,
-            used,
-            embedding.as_deref().map(|v| (model.as_str(), v)),
-            limit + 1,
-        )?;
-        let truncated = hits.len() > limit;
-        hits.truncate(limit);
-        let mut response = json!({"status":"ready","mode_requested":mode,"mode_used":used,"semantic":semantic,"coverage":self.corpus.coverage,"hits":hits,"truncated":truncated});
+        let mut response = json!({"status":"ready", "mode_used":used, "semantic":semantic,
+            "coverage":self.corpus.coverage, "hits":[], "truncated":false});
         if self.corpus.descriptor.repo.is_some() {
             response["source_id"] = json!(id);
         } else {
             response["index"] = json!(self.corpus.descriptor.route.index);
             response["path"] = json!(self.corpus.descriptor.route.path);
+        }
+        response = response::finish(response, requested, mode, fallback);
+        if matches!(response["status"].as_str(), Some("ready" | "degraded")) {
+            let mut hits = inner.store.query(
+                &self.corpus,
+                query,
+                used,
+                embedding.as_deref().map(|v| (model.as_str(), v)),
+                limit + 1,
+            )?;
+            response["truncated"] = json!(hits.len() > limit);
+            hits.truncate(limit);
+            response["hits"] = json!(hits);
         }
         Ok(response)
     }

@@ -5,7 +5,7 @@ MCP. Find relevant sources, search for passages, and read the original text with
 file, line and revision references.
 
 **[Get started](https://hellonoel.github.io/aiexandria/getting-started.html)** ·
-[Download v0.4.0](https://github.com/HelloNoel/aiexandria/releases/tag/v0.4.0) ·
+[Download v0.5.0](https://github.com/HelloNoel/aiexandria/releases/tag/v0.5.0) ·
 [User guide](docs/introduction.md)
 
 On Apple Silicon macOS or Linux with [Homebrew](https://brew.sh), install
@@ -29,7 +29,7 @@ maintain one in a separate repository. Sources can span public and private
 repositories, branches, tags and pinned commits, including SHA-256 repositories.
 
 - **Find sources:** global metadata discovery returns a small ranked selection
-  from nested indexes.
+  from nested indexes, using hybrid ranking when a provider is configured.
 - **Search and read:** use existing source searches, or enable
   [ranked search](docs/semantic-search.md) for keyword, semantic and hybrid
   passages. Global ranked search combines indexed cached documentation across
@@ -47,9 +47,11 @@ or schedules are installed automatically. The starter collection includes
 selected pages, not complete upstream manuals, and a first visit can require a
 download.
 
-**Upgrading from v0.3.0:** Git is now a runtime dependency and must be available
-to the MCP process. Existing registries and custom searches continue to work.
-See the [release notes](release-notes.md) for cache and search setup details.
+**Upgrading from v0.4.0:** search defaults now prefer hybrid retrieval with a
+configured provider. Semantic failures are explicit; request `fallback: keyword`
+to allow degraded results. Existing registries and custom searches continue to
+work. See the [release notes](release-notes.md) for discovery and provider
+setup.
 
 See [adding documentation](docs/adding-documentation.md),
 [configuration](docs/configuration.md), and

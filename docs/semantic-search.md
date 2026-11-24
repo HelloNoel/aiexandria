@@ -1,7 +1,7 @@
 # Semantic search
 
-Ranked search is optional in v0.4.0. Enable it with a separate search
-configuration; the default setup continues to work without it.
+Ranked search is optional. Enable it with a separate search configuration; the
+default setup continues to work without it.
 
 Ranked search finds passages in documentation already cached by AIexandria.
 Keyword search uses words; semantic search can find related concepts with
@@ -93,8 +93,8 @@ llama-server \
   --parallel 1 --host 127.0.0.1 --port 8080
 ```
 
-Leave that process running while using semantic search. AIexandria does not
-start or supervise it. These settings use one provider slot and a small context
+Leave that process running while using semantic search, or configure automatic
+startup below. These settings use one provider slot and a small context
 allocation; increasing the model's maximum context is unnecessary for the
 default documentation chunks.
 
@@ -134,6 +134,80 @@ Loopback HTTP(S) endpoints work by default. A remote HTTPS provider requires
 that service. If authentication is needed, set `token_env` to the name of an
 environment variable containing its bearer token. Do not put a token in the YAML
 or URL. Redirects and credentials in endpoint URLs are rejected.
+
+### Start a local provider automatically
+
+Add a startup command to your existing embedding configuration to let AIexandria
+start the provider when a semantic/hybrid query or an explicit semantic update
+needs it. Replace the executable and model paths with absolute paths on your
+machine:
+
+```yaml
+embedding:
+  # Keep your existing provider, endpoint, model, revision and prefix fields.
+  startup:
+    argv:
+      - /absolute/path/to/llama-server
+      - --model
+      - /absolute/path/to/embeddinggemma.gguf
+      - --alias
+      - embeddinggemma
+      - --embedding
+      - --pooling
+      - mean
+      - --ctx-size
+      - "2048"
+      - --batch-size
+      - "2048"
+      - --ubatch-size
+      - "2048"
+      - --parallel
+      - "1"
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8080"
+    timeout_secs: 60
+```
+
+Startup is opt-in and accepts only loopback endpoints. The executable and
+arguments run directly, without a shell, interpolation, or automatic downloads.
+Use a foreground server command; commands that daemonize themselves are not
+supported. Only your local search configuration can supply this command; Pinakes
+indexes cannot. Restart existing MCP clients after changing settings.
+
+Concurrent CLI and MCP requests share admission and lifetime locks for the same
+local port, even with different repository caches. A healthy external provider
+is reused. Startup verifies the embedding API, rather than just an open port.
+Conflicting model/revision configurations produce an error. A failed start has a
+30-second retry backoff; an explicit start command can retry immediately.
+
+```sh
+aiexandria embedding start
+aiexandria embedding status
+aiexandria embedding stop
+```
+
+`startup.timeout_secs` limits model readiness after launch. The
+`embedding start` command also allows time for connection checks and supervisor
+startup. MCP requests retain their own request deadlines while shared startup
+continues.
+
+These commands use the same search configuration as MCP and return JSON. Status
+reports readiness, ownership, startup diagnostics and the log location. Stop
+addresses only an AIexandria-owned supervisor; it never kills a process using a
+saved PID or stops an external server. The provider survives individual CLI/MCP
+exits and stays running until stopped, logout or reboot. Automatic login startup
+and idle shutdown are not configured.
+
+Provider state lives under the platform's local data directory in
+`aiexandria/providers`; `AIEXANDRIA_EMBEDDING_STATE` overrides that root. Logs
+rotate at roughly 1 MiB with one previous file and never share MCP stdout.
+Listing tools and keyword search/discovery do not start a model. Semantic or
+hybrid discovery can start the same provider and prepares separate metadata
+vectors; see [source discovery](source-discovery.md). Startup and discovery
+default settings do not invalidate existing document embeddings. Provider
+readiness, metadata embedding and document indexing are separate phases.
 
 ### Choose a model for your available memory
 
@@ -263,9 +337,12 @@ Discover a topic, use an advertised mode, then read the best passages:
 
 That explicit route searches listed documents. To search an automatically
 selected cached repository scope, pass its discovered `source_id` instead of
-`index` and `path`. The returned `search` object provides the route and a
-default mode. Custom-command sources keep their original syntax; select a browse
-or cached repository source for ranked search.
+`index` and `path`. The returned `recommended_search` object provides the
+preferred ranked route. Custom-command sources keep their original `search`
+syntax; their recommended ranked alternative can cover different paths and file
+types. Repository routes can be discovered from cached index metadata before the
+repository is cached; selecting one prepares that repository without executing
+its custom command.
 
 `keyword` uses SQLite FTS5/BM25 with word matching. Query words are safely
 quoted and combined as alternatives; operators such as AND/OR are not a portable
@@ -277,17 +354,27 @@ still ranks metadata.
 The default is five hits and 8,192 output bytes; allowed ranges are 1–20 hits
 and 1,024–32,768 bytes. At most two passages per file are returned. `deep: true`
 belongs to legacy search and cannot be combined with a ranked mode. Omitting
-`mode` preserves existing searches, except that generated cached repository
-sources select their advertised default.
+`mode` selects `auto`: hybrid when a provider is configured, otherwise keyword.
+Provider downtime does not change that choice. Explicit command IDs and command
+source routes retain their original syntax. Use `list_docs` for metadata-only
+browsing, or `deep: true` for legacy substring/document search.
 
 Discovery also reports `search_status` with last-indexed coverage and readiness;
 it is informational and each search revalidates membership.
 
-Check `mode_used`, `semantic`, `coverage`, `freshness` and `truncated`. Hybrid
-search falls back to keyword results while embeddings are pending or
-unavailable. Semantic-only requests return a normal `preparing` or `unavailable`
-response when they cannot run. If a source has no indexed text, there are no
-hits.
+Check `status`, `mode_requested`, `mode_resolved`, `mode_used`, `semantic`,
+`coverage`, `freshness` and `truncated`. Hybrid and semantic requests are strict
+by default. Pending embeddings or startup return `preparing` with a phase and
+retry delay; a failed or unconfigured provider returns `unavailable` with MCP
+`isError: true`. These responses contain no search hits and must not be treated
+as evidence that documentation is absent.
+
+To deliberately accept keyword results when embeddings cannot be used, pass
+`fallback: "keyword"`. The response has `status: "degraded"`,
+`mode_used: "keyword"` and a top-level warning; it is not marked as a tool error
+because fallback was explicitly allowed. The default is `fallback: "none"`. Text
+and structured responses contain the same status, diagnostics and results. A
+successful zero-match search remains `ready` with an empty hits array.
 
 Each hit includes `read` (index, path, entry ID), `file`, `revision`, `offset`
 and `limit`. Pass those route fields and the top-level `snapshot` token to
@@ -310,10 +397,12 @@ source contains the answer:
 }
 ```
 
+Omitting a source also selects global search, so a query alone is sufficient.
 This ranks one combined corpus of currently indexed, cached documentation across
 enabled registry roots. It never fetches repositories, hydrates missing files,
 executes custom commands or builds document embeddings as part of the request.
-The background indexer can continue its existing work. With an embedding
+The request can start a configured local provider and wake background embedding
+preparation. It does not wait for a whole corpus to embed. With an embedding
 provider configured, the default mode is hybrid; otherwise it is keyword.
 
 Narrow the search with plural filters:
@@ -348,11 +437,12 @@ list every configured index in the response.
 Coverage reports the number of sources and passages searched, sources awaiting a
 current index, unavailable metadata/repositories and work limits. It describes
 the cached corpus, not all documentation on remote repositories. If some
-embeddings are pending, hybrid still combines available vectors with keyword
-results from the other eligible documents. The embedded_chunks count records
-vectors compared in this query; keyword-only searches do not compare vectors. If
-the provider fails, hybrid returns keyword results when the remaining execution
-budget permits it.
+embeddings are pending, strict hybrid returns `preparing` until the selected
+searchable chunks have vectors; an embedding failure is a tool error. Explicit
+keyword fallback returns one consistent keyword ranking instead of an uneven mix
+of vector-ready and keyword-only files. The embedded_chunks count records
+vectors compared in the returned ranking; keyword-only searches do not compare
+vectors. Provider readiness does not imply complete coverage of remote sources.
 
 When no requested sources are cached, global search reports unavailable; it does
 not imply that a download is queued. Use discovery to locate documentation that

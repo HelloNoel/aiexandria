@@ -1,106 +1,84 @@
-# AIexandria v0.4.0
+# AIexandria v0.5.0
 
-Search documentation across repositories, keep using cached evidence during
-refreshes, and prepare frequently used sources before a session. AIexandria
-v0.4.0 adds optional ranked passage search and moves repository access to the
-Git CLI, including support for SHA-256 repositories.
+AIexandria now prefers hybrid search when an embedding provider is configured,
+reports semantic failures explicitly, and can start your local provider on
+demand. Source discovery can also use embeddings to find relevant repositories
+before their documents are cached.
 
 ## Highlights
 
-- **Keyword, semantic and hybrid search** — opt-in passage retrieval with
-  bounded results, file/line references and explicit keyword fallback. Use a
-  local Ollama or OpenAI-compatible embedding server; no model is bundled or
-  downloaded automatically.
-- **Global ranked search** — search indexed cached documentation across
-  configured indexes, with optional index/source filters, duplicate removal,
-  source routes and coverage reporting. Queries do not fetch repositories or
-  execute custom commands.
-- **Search during refresh** — complete cached snapshots remain usable while due
-  refreshes run in the background. Missing content returns a normal preparing
-  response instead of a refresh-timeout tool error.
-- **Prepare ahead of time** — `aiexandria update` supports manual and scheduled
-  preparation. MCP requests and concurrent updaters share repository work;
-  interactive requests can promote queued jobs. Add `--semantic` to index
-  available documentation, or `--semantic --cached-only` to skip Git work. Add
-  `--all` to include uncached sources across configured indexes or a selected
-  subtree.
-- **Consistent follow-up reads** — pass the search response's snapshot token to
-  read the same revision for up to 15 minutes. Current routes and permissions
-  are still checked.
-- **Complete MCP results** — reads, listings and existing search commands
-  include their output in structured responses, so clients such as Claude Code
-  receive document text instead of only status metadata. Failure responses also
-  retain their error messages.
-- **Selective downloads and SHA-256 support** — explicit document/index paths
-  use partial clones and selective checkout where supported. SHA-1 and SHA-256
-  branches, tags and commit pins work through Git. Commands and required
-  submodules retain complete checkouts; commands run in independent copies.
-
-**Submodule migration:** submodules are now disabled by default. Add
-`submodules: true` to index entries or registry roots that require nested
-documentation before upgrading. For remote index generation, use
-`generate --submodules`. Explicit boolean settings retain their meaning.
+- **Unified search defaults:** omitted search mode selects `auto`, using hybrid
+  retrieval with a provider and keyword retrieval otherwise. Omit the source to
+  search indexed cached documentation globally. Explicit custom-command routes
+  retain their query syntax.
+- **Semantic source discovery:** rank source names, descriptions and routes with
+  keyword, semantic or hybrid search. Metadata embeddings are cached separately
+  from document embeddings, so discovery does not download or index every
+  source's content. Prepare them with `aiexandria update --discovery --wait`.
+- **Clear failures:** semantic and hybrid requests return MCP tool errors when
+  the provider fails, and `preparing` while embeddings are incomplete. Request
+  `fallback: keyword` explicitly to receive degraded keyword results with a
+  warning. Text and structured responses expose the same status and diagnostics.
+- **Optional provider startup:** configure `embedding.startup.argv` in your
+  local search configuration. AIexandria starts it when needed, shares startup
+  across clients and processes, and prevents duplicate managed models. Healthy
+  external providers are reused; managed providers outlive individual MCP
+  clients.
+- **Provider controls:** use `aiexandria embedding start`, `status` and `stop`
+  to manage the configured local provider. Logs are bounded, and stop requests
+  target only an owned provider. CLI startup allows connection checks and
+  supervisor setup in addition to the configured model warmup time. Native
+  Windows validation covers concurrent startup, client exit and crash cleanup.
 
 ## Install
 
-**Git 2.43.7 or newer is now required at runtime.** Install Git and ensure it is
-available on the MCP client's PATH, or select an absolute path with `--git` /
-`AIEXANDRIA_GIT`.
+On Apple Silicon macOS or Linux with Homebrew:
 
-Download the archive for your platform, extract it and put `aiexandria` on PATH:
+```sh
+brew install HelloNoel/tap/aiexandria
+```
+
+Homebrew installs Git as a dependency. Ripgrep is optional; install it
+separately for custom sources that invoke `rg`. For Intel Macs and Windows, use
+a release archive. Intel Homebrew installations can build Git's dependencies
+from source.
+
+Manual installations require **Git 2.43.7 or newer** on the MCP client's PATH,
+or selected with `--git` / `AIEXANDRIA_GIT`.
 
 | Platform              | Asset                                              |
 | --------------------- | -------------------------------------------------- |
-| macOS (Apple Silicon) | aiexandria-v0.4.0-aarch64-apple-darwin.tar.gz      |
-| macOS (Intel)         | aiexandria-v0.4.0-x86_64-apple-darwin.tar.gz       |
-| Linux (ARM64)         | aiexandria-v0.4.0-aarch64-unknown-linux-gnu.tar.gz |
-| Linux (x86-64)        | aiexandria-v0.4.0-x86_64-unknown-linux-gnu.tar.gz  |
-| Windows (x86-64)      | aiexandria-v0.4.0-x86_64-pc-windows-gnu.zip        |
+| macOS (Apple Silicon) | aiexandria-v0.5.0-aarch64-apple-darwin.tar.gz      |
+| macOS (Intel)         | aiexandria-v0.5.0-x86_64-apple-darwin.tar.gz       |
+| Linux (ARM64)         | aiexandria-v0.5.0-aarch64-unknown-linux-gnu.tar.gz |
+| Linux (x86-64)        | aiexandria-v0.5.0-x86_64-unknown-linux-gnu.tar.gz  |
+| Windows (x86-64)      | aiexandria-v0.5.0-x86_64-pc-windows-gnu.zip        |
 
-Verify your archive against its entry in `SHA256SUMS`. For example, on macOS:
-
-```sh
-shasum -a 256 aiexandria-v0.4.0-aarch64-apple-darwin.tar.gz
-```
-
-The macOS binaries are not notarized. If Gatekeeper blocks a download you have
-verified, clear its quarantine flag after extracting:
-
-```sh
-xattr -d com.apple.quarantine aiexandria
-```
-
-See the
+Verify the archive against `SHA256SUMS` before extracting it. See the
 [installation guide](https://hellonoel.github.io/aiexandria/installation.html)
-for Linux/Windows verification, source builds and MCP client configuration.
+for platform-specific instructions and MCP client setup.
 
 ## Upgrade
 
-Existing registries and custom-command query languages continue to work. Ranked
-search is disabled unless enabled in `search.yaml`; the default public
-collection still works without an embedding service or hosting account. No
-Pinakes format change is required for ranked or global search.
+Restart your MCP client after replacing the binary. Existing registries and
+custom-command query languages remain compatible; no Pinakes format change is
+required. Ranked passage search still requires an enabled `search.yaml`.
 
-The repository cache layout changes; older caches remain available for rollback.
-Prepare a public source before restarting your MCP client:
+- Clients relying on metadata substring search should use `list_docs`, or
+  `deep: true` for legacy substring/document search.
+- Clients relying on automatic hybrid fallback must now request
+  `fallback: keyword` and handle `status: degraded`. Check MCP `isError` for
+  provider failures and follow retry guidance for `preparing` responses.
+- Discovery defaults to hybrid when a provider is configured. Set
+  `discovery.default_mode: keyword` in `search.yaml`, or request
+  `mode: keyword`, to keep keyword discovery. Discovery ranks metadata, not
+  document evidence.
+- Provider startup is optional and configured only in the local search config.
+  Install the provider and model yourself; AIexandria does not download models.
+  Listing and keyword search/discovery do not start an embedding provider.
 
-```sh
-aiexandria update --index public-docs --path languages --path nodejs
-```
-
-If you use a custom registry, add the public collection first or substitute one
-of your own index routes. See
-[repository updates](https://hellonoel.github.io/aiexandria/updating.html) for
-scheduling and concurrency. No daemon or schedule is installed automatically.
-
-## Getting started
-
-Follow the
-[getting-started guide](https://hellonoel.github.io/aiexandria/getting-started.html)
-for the default setup, or
-[enable ranked search](https://hellonoel.github.io/aiexandria/semantic-search.html)
-for conceptual and cross-repository questions.
-
-Discovery still ranks metadata. Ranked searches cover eligible cached documents,
-and global results report gaps and work limits. Verify returned passages before
-using them as evidence.
+Document/vector caches are preserved when startup or discovery defaults change.
+For setup and troubleshooting, see
+[ranked search](https://hellonoel.github.io/aiexandria/semantic-search.html),
+[source discovery](https://hellonoel.github.io/aiexandria/source-discovery.html)
+and [repository updates](https://hellonoel.github.io/aiexandria/updating.html).

@@ -1,4 +1,5 @@
 //! Built-in source discovery. Queries rank metadata; they never execute searches.
+mod metadata;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,6 +14,9 @@ use crate::cache::RepoCache;
 use crate::catalog::{clip, tokenize, Catalog, Source};
 pub use crate::catalog::{CatalogStatus, SourceKind, SourceRoute};
 use crate::registry::RegistryConfig;
+use crate::search::config::SearchConfig;
+use crate::search::{Fallback, Mode};
+use serde_json::{json, Value};
 
 const FOREGROUND_BUDGET: Duration = Duration::from_millis(1500);
 const CURSOR_TTL: Duration = Duration::from_secs(300);
@@ -30,6 +34,10 @@ pub struct DiscoverSourcesRequest {
     pub indexes: Option<Vec<String>>,
     /// Return command sources, browse sources, or both (default).
     pub kinds: Option<Vec<SourceKind>>,
+    /// Metadata ranking: auto (hybrid with a provider, keyword otherwise), keyword, semantic, hybrid.
+    pub mode: Option<Mode>,
+    /// Explicitly allow keyword results if embedding discovery cannot complete. Default none.
+    pub fallback: Option<Fallback>,
     /// Number of sources per page, 1-20. Default 5.
     pub limit: Option<usize>,
     /// Maximum UTF-8 bytes in the JSON response, 512-32768. Default 8192.
@@ -50,6 +58,11 @@ pub struct DiscoveredSource {
     pub query_profile: &'static str,
     /// Existing route arguments accepted by search_docs; source_id can also be used directly.
     pub search: serde_json::Value,
+    /// Preferred natural-language route; a command's search route stays literal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommended_search: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ranked_scope: Option<&'static str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub search_modes: Vec<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,6 +71,8 @@ pub struct DiscoveredSource {
 
 #[derive(Debug, Serialize)]
 pub struct DiscoveryResponse {
+    #[serde(flatten)]
+    pub retrieval: Value,
     pub sources: Vec<DiscoveredSource>,
     pub catalog: CatalogStatus,
     pub generation: u64,
@@ -76,6 +91,7 @@ struct QuerySnapshot {
     generation: u64,
     limited: bool,
     bytes: usize,
+    retrieval: Value,
 }
 
 /// Internal boundary for later ranking implementations, not a public plugin protocol.
@@ -155,16 +171,104 @@ pub(crate) struct DiscoveryService {
     catalog: Catalog,
     snapshots: Mutex<VecDeque<Arc<QuerySnapshot>>>,
     ranking_slots: Arc<tokio::sync::Semaphore>,
+    metadata_directory: std::path::PathBuf,
+    metadata: Option<Arc<metadata::MetadataIndex>>,
+    default_mode: Mode,
 }
 
 impl DiscoveryService {
     pub fn new(registry: Arc<RegistryConfig>, cache: Arc<RepoCache>) -> Self {
+        let metadata_directory = cache
+            .root()
+            .join("search/discovery")
+            .join(metadata::digest(serde_json::to_vec(&*registry).unwrap()));
         Self {
             search: None,
             catalog: Catalog::new(registry, cache),
             snapshots: Mutex::new(VecDeque::new()),
             ranking_slots: Arc::new(tokio::sync::Semaphore::new(2)),
+            metadata_directory,
+            metadata: None,
+            default_mode: Mode::Auto,
         }
+    }
+
+    pub(crate) fn configure(&mut self, config: &SearchConfig) {
+        if !config.enabled {
+            self.default_mode = Mode::Auto;
+            self.metadata = None;
+            return;
+        }
+        self.default_mode = config.discovery.default_mode;
+        self.metadata = config
+            .embedding
+            .clone()
+            .map(|provider| metadata::MetadataIndex::new(&self.metadata_directory, provider));
+    }
+
+    async fn candidates(
+        &self,
+        names: &[String],
+        kinds: Option<&[SourceKind]>,
+        deadline: Instant,
+    ) -> Result<(Vec<Arc<Source>>, CatalogStatus, u64), String> {
+        self.catalog.request(names);
+        let snapshot = loop {
+            let snapshot = self.catalog.snapshot(names);
+            if snapshot.status.complete
+                || snapshot.status.pending_indexes == 0
+                || Instant::now() >= deadline
+            {
+                break snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+        let mut sources = snapshot.sources;
+        if let Some(search) = &self.search {
+            let modes = if search.has_embeddings() {
+                vec!["keyword", "hybrid", "semantic"]
+            } else {
+                vec!["keyword"]
+            };
+            for source in &mut sources {
+                if source.kind == SourceKind::Browse
+                    && source.has_documents
+                    && search.supports(&source.route.index, &source.route.path)
+                {
+                    let source = Arc::make_mut(source);
+                    source.search_modes = modes.clone();
+                }
+            }
+            let search = search.clone();
+            let generated = tokio::task::spawn_blocking(move || search.sources())
+                .await
+                .map_err(|_| "cached source inventory failed")?;
+            for descriptor in generated {
+                if !names.contains(&descriptor.route.index) {
+                    continue;
+                }
+                let mut source = Source::new(
+                    SourceKind::CachedRepository,
+                    SourceRoute {
+                        index: descriptor.route.index,
+                        path: descriptor.route.path,
+                        command_id: None,
+                    },
+                    &descriptor.name,
+                    &descriptor.description,
+                    "cached repository documentation",
+                    "",
+                );
+                source.id = descriptor.id;
+                source.search_modes = modes.clone();
+                sources.push(Arc::new(source));
+            }
+        }
+        let candidates: Vec<_> = sources
+            .into_iter()
+            .filter(|source| kinds.is_none_or(|kinds| kinds.contains(&source.kind)))
+            .collect();
+        Ok((candidates, snapshot.status, snapshot.generation))
     }
 
     pub fn route(&self, id: &str) -> Option<SourceRoute> {
@@ -172,6 +276,7 @@ impl DiscoveryService {
     }
 
     pub async fn discover(&self, req: DiscoverSourcesRequest) -> Result<String, String> {
+        let deadline = Instant::now() + FOREGROUND_BUDGET;
         let limit = req.limit.unwrap_or(5);
         let bytes = req.max_output_bytes.unwrap_or(8192);
         if !(1..=20).contains(&limit) {
@@ -181,9 +286,14 @@ impl DiscoveryService {
             return Err("max_output_bytes must be between 512 and 32768".into());
         }
         if let Some(cursor) = req.cursor {
-            if req.query.is_some() || req.indexes.is_some() || req.kinds.is_some() {
+            if req.query.is_some()
+                || req.indexes.is_some()
+                || req.kinds.is_some()
+                || req.mode.is_some()
+                || req.fallback.is_some()
+            {
                 return Err(
-                    "cursor continues its original query and scope; omit query, indexes, and kinds"
+                    "cursor continues its original query and scope; omit query, indexes, kinds, mode and fallback"
                         .into(),
                 );
             }
@@ -234,79 +344,56 @@ impl DiscoveryService {
         if req.kinds.as_ref().is_some_and(Vec::is_empty) {
             return Err("kinds must not be empty".into());
         }
-        self.catalog.request(&names);
-        let started = Instant::now();
-        let snapshot = loop {
-            let snapshot = self.catalog.snapshot(&names);
-            if snapshot.status.complete
-                || snapshot.status.pending_indexes == 0
-                || started.elapsed() >= FOREGROUND_BUDGET
-            {
-                break snapshot;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        };
-        let mut sources = snapshot.sources;
-        if let Some(search) = &self.search {
-            let modes = if search.has_embeddings() {
-                vec!["keyword", "hybrid", "semantic"]
-            } else {
-                vec!["keyword"]
-            };
-            for source in &mut sources {
-                if source.kind == SourceKind::Browse
-                    && source.has_documents
-                    && search.supports(&source.route.index, &source.route.path)
-                {
-                    let source = Arc::make_mut(source);
-                    source.search_modes = modes.clone();
-                }
-            }
-            let search = search.clone();
-            let generated = tokio::task::spawn_blocking(move || search.sources())
-                .await
-                .map_err(|_| "cached source inventory failed")?;
-            for descriptor in generated {
-                if !names.contains(&descriptor.route.index) {
-                    continue;
-                }
-                let mut source = Source::new(
-                    SourceKind::CachedRepository,
-                    SourceRoute {
-                        index: descriptor.route.index,
-                        path: descriptor.route.path,
-                        command_id: None,
-                    },
-                    &descriptor.name,
-                    &descriptor.description,
-                    "cached repository documentation",
-                    "",
-                );
-                source.id = descriptor.id;
-                source.search_modes = modes.clone();
-                sources.push(Arc::new(source));
-            }
-        }
-        let candidates: Vec<_> = sources
-            .into_iter()
-            .filter(|source| {
-                req.kinds
-                    .as_ref()
-                    .is_none_or(|kinds| kinds.contains(&source.kind))
-            })
-            .collect();
-        let permit = self
-            .ranking_slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| "discovery is busy; retry shortly")?;
+        let (candidates, catalog, generation) = self
+            .candidates(&names, req.kinds.as_deref(), deadline)
+            .await?;
+        let permit = self.ranking_slots.clone().try_acquire_owned();
         let query_owned = query.to_string();
-        let ranked = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            BuiltinRanker.rank(&candidates, &query_owned)
-        })
+        let requested = req.mode.unwrap_or(self.default_mode);
+        let fallback = req.fallback.unwrap_or_default();
+        let resolved = requested.resolve(self.metadata.is_some());
+        let metadata = self.metadata.clone();
+        let total = candidates.len();
+        let ranking = tokio::task::spawn_blocking(move || {
+            let Ok(_permit) = permit else {
+                return (
+                    Vec::new(),
+                    json!({"status":"preparing","mode_requested":requested,"mode_resolved":resolved,"mode_used":null,
+                    "phase":"discovery","retry_after_ms":2000,"message":"Discovery is busy; retry shortly."}),
+                );
+            };
+            rank_sources(
+                &candidates,
+                &query_owned,
+                requested,
+                resolved,
+                fallback,
+                metadata.as_ref(),
+                deadline,
+            )
+        });
+        // Blocking work retains its permit until it exits; cancellation cannot
+        // create an unbounded number of provider requests or detached rankers.
+        let (ranked, mut retrieval) = match tokio::time::timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            ranking,
+        )
         .await
-        .map_err(|_| "source ranking failed")?;
+        {
+            Ok(result) => result.map_err(|_| "source ranking failed")?,
+            Err(_) => (
+                Vec::new(),
+                json!({"status":"preparing","mode_requested":requested,"mode_resolved":resolved,"mode_used":null,
+                "phase":"discovery", "retry_after_ms":2000,"message":"Discovery is still preparing; retry shortly.",
+                "semantic":{"status":"preparing","total_sources":total}}),
+            ),
+        };
+        if total == 0 && catalog.pending_indexes > 0 {
+            retrieval["status"] = json!("preparing");
+            retrieval["mode_used"] = Value::Null;
+            retrieval["phase"] = json!("catalog");
+            retrieval["retry_after_ms"] = json!(2000);
+        }
         let mut retained = Vec::new();
         let mut size = 0;
         let mut limited = false;
@@ -321,17 +408,17 @@ impl DiscoveryService {
         }
         let nonce = NEXT_SNAPSHOT.fetch_add(1, Ordering::Relaxed);
         let id = hex::encode(Sha256::digest(format!(
-            "{}:{nonce}:{query}:{names:?}",
-            snapshot.generation
+            "{generation}:{nonce}:{query}:{names:?}"
         )));
         let snapshot = Arc::new(QuerySnapshot {
             id,
             created: Instant::now(),
             sources: retained,
-            catalog: snapshot.status,
-            generation: snapshot.generation,
+            catalog,
+            generation,
             limited,
             bytes: size,
+            retrieval,
         });
         let rendered = snapshot.clone();
         let search = self.search.clone();
@@ -360,13 +447,19 @@ fn render_page(
     budget: usize,
     search: Option<&crate::search::SearchService>,
 ) -> Result<String, String> {
+    let mut retrieval = snapshot.retrieval.clone();
+    let retry = retrieval
+        .as_object_mut()
+        .and_then(|value| value.remove("retry_after_ms"))
+        .and_then(|value| value.as_u64());
     let mut response = DiscoveryResponse {
+        retrieval,
         sources: Vec::new(),
         catalog: snapshot.catalog.clone(),
         generation: snapshot.generation,
         next_cursor: None,
         matches_limited: snapshot.limited,
-        retry_after_ms: if snapshot.catalog.pending_indexes > 0 {
+        retry_after_ms: retry.or(if snapshot.catalog.pending_indexes > 0 {
             Some(2000)
         } else if snapshot.catalog.failed_nodes > 0
             || snapshot.catalog.limited_indexes > 0
@@ -375,8 +468,31 @@ fn render_page(
             Some(30_000)
         } else {
             None
-        },
+        }),
     };
+    // Keep essential modes, diagnostics and coverage under small budgets. The
+    // top-level error/warning already contains the duplicated explanatory text.
+    if serde_json::to_vec(&response)
+        .map_err(|e| e.to_string())?
+        .len()
+        > budget
+    {
+        let value = &mut response.retrieval;
+        value.as_object_mut().unwrap().remove("message");
+        if let Some(semantic) = value.get_mut("semantic").and_then(Value::as_object_mut) {
+            semantic.remove("message");
+        }
+        if let Some(error) = value.get_mut("error").and_then(Value::as_object_mut) {
+            error.remove("action");
+        }
+        if let Some(warnings) = value.get_mut("warnings").and_then(Value::as_array_mut) {
+            for warning in warnings {
+                if let Some(warning) = warning.as_object_mut() {
+                    warning.remove("action");
+                }
+            }
+        }
+    }
     for source in snapshot.sources.iter().skip(offset).take(limit) {
         let summary = clip(&source.description, 240);
         response.sources.push(DiscoveredSource {
@@ -387,12 +503,22 @@ fn render_page(
             summary,
             query_profile: match source.kind {
                 SourceKind::Command => "source_defined",
+                SourceKind::Browse if !source.search_modes.is_empty() => "natural_language",
                 SourceKind::Browse => "substring",
                 SourceKind::CachedRepository => "natural_language",
             },
             search: if source.kind == SourceKind::CachedRepository {
                 serde_json::json!({"source_id": source.id, "mode": if source.search_modes.contains(&"hybrid") { "hybrid" } else { "keyword" }})
             } else { serde_json::to_value(&source.route).unwrap() },
+            recommended_search: if !source.search_modes.is_empty() {
+                Some(serde_json::json!({"source_id":source.id,"mode":"auto"}))
+            } else {
+                search.and_then(|service| service.ranked_alternative(&source.route))
+                    .map(|descriptor| serde_json::json!({"source_id":descriptor.id,"mode":"auto"}))
+            },
+            ranked_scope: if source.kind == SourceKind::Command && search.is_some() {
+                Some("Automatically selected repository documentation; may differ from this command's paths and file types.")
+            } else { None },
             search_modes: source.search_modes.clone(),
             search_status: search.filter(|_| !source.search_modes.is_empty()).map(|service| {
                 let id = if source.kind == SourceKind::CachedRepository { source.id.clone() }
@@ -448,5 +574,165 @@ fn render_page(
     Ok(body)
 }
 
+fn rank_sources(
+    candidates: &[Arc<Source>],
+    query: &str,
+    requested: Mode,
+    resolved: Mode,
+    fallback: Fallback,
+    metadata: Option<&Arc<metadata::MetadataIndex>>,
+    deadline: Instant,
+) -> (Vec<Arc<Source>>, Value) {
+    let lexical = if resolved != Mode::Semantic || fallback == Fallback::Keyword {
+        BuiltinRanker.rank(candidates, query)
+    } else {
+        Vec::new()
+    };
+    if resolved == Mode::Keyword {
+        return (
+            lexical,
+            crate::search::response::finish(
+                json!({"status":"ready","mode_used":"keyword"}),
+                requested,
+                resolved,
+                fallback,
+            ),
+        );
+    }
+    let mut semantic = json!({"status":"not_configured","message":"Configure and enable an embedding provider in search.yaml, or request mode: keyword."});
+    let mut semantic_ranked = Vec::new();
+    let mut identity = None;
+    if let Some(index) = metadata {
+        identity = Some(index.identity(candidates));
+        let preparation_deadline = if fallback == Fallback::Keyword {
+            Instant::now()
+        } else {
+            deadline
+                .checked_sub(Duration::from_millis(50))
+                .unwrap_or(deadline)
+        };
+        match index.ensure(candidates, preparation_deadline) {
+            Ok(coverage) => {
+                semantic = coverage;
+                if semantic["status"] == "ready" {
+                    match index.rank(candidates, query, deadline) {
+                        Ok(ranked) => semantic_ranked = ranked,
+                        Err(error) => merge_diagnostic(&mut semantic, &error),
+                    }
+                }
+            }
+            Err(error) => merge_diagnostic(&mut semantic, &error),
+        }
+    }
+    let fulfilled = semantic["status"] == "ready";
+    let mut result = crate::search::response::finish(
+        json!({
+            "status":"ready","mode_used":resolved,"semantic":semantic,"metadata_snapshot":identity,
+        }),
+        requested,
+        resolved,
+        fallback,
+    );
+    if result["phase"] == "document_embeddings" {
+        result["phase"] = json!("source_embeddings");
+    }
+    let ranked = if fulfilled {
+        if resolved == Mode::Hybrid {
+            metadata::fuse(lexical, semantic_ranked, query)
+        } else {
+            semantic_ranked
+        }
+    } else if fallback == Fallback::Keyword {
+        lexical
+    } else {
+        Vec::new()
+    };
+    (ranked, result)
+}
+
+fn merge_diagnostic(semantic: &mut Value, error: &crate::error::AIexError) {
+    let diagnostic = crate::search::provider::diagnostic(error);
+    semantic["status"] = json!(if diagnostic["code"] == "discovery_preparing" {
+        "preparing"
+    } else {
+        "unavailable"
+    });
+    for (key, value) in diagnostic.as_object().unwrap() {
+        semantic[key] = value.clone();
+    }
+}
+
+/// Prepare only source metadata, without executing commands or scanning document
+/// bodies. A non-waiting call makes bounded progress; rerun or use --wait to finish.
+pub async fn prepare_metadata(
+    registry: RegistryConfig,
+    cache: RepoCache,
+    config: SearchConfig,
+    index: Option<String>,
+    wait: bool,
+    timeout: Duration,
+) -> crate::error::Result<Value> {
+    use crate::error::AIexError;
+    config.validate()?;
+    if timeout.is_zero() {
+        return Err(AIexError::Other("update timeout must be positive".into()));
+    }
+    let registry = Arc::new(registry);
+    let cache = Arc::new(cache);
+    let mut service = DiscoveryService::new(registry.clone(), cache.clone());
+    service.configure(&config);
+    // Inventory descriptors only. Do not start the document index coordinator.
+    if config.enabled {
+        service.search = Some(crate::search::SearchService::new(config, registry, cache)?);
+    }
+    let names = index
+        .map(|i| vec![i])
+        .unwrap_or_else(|| service.catalog.names());
+    if names.is_empty()
+        || names
+            .iter()
+            .any(|name| !service.catalog.names().contains(name))
+    {
+        return Err(AIexError::Other(
+            "select a registered index for discovery preparation".into(),
+        ));
+    }
+    let deadline = Instant::now()
+        + if wait {
+            timeout
+        } else {
+            timeout.min(FOREGROUND_BUDGET)
+        };
+    let (sources, catalog, generation) = service
+        .candidates(&names, None, deadline)
+        .await
+        .map_err(AIexError::Other)?;
+    let total = sources.len();
+    let semantic = if let Some(metadata) = service.metadata {
+        tokio::task::spawn_blocking(move || metadata.ensure(&sources, deadline))
+            .await
+            .map_err(|_| AIexError::Other("discovery preparation worker failed".into()))??
+    } else {
+        json!({"status":"not_configured","total_sources":total})
+    };
+    let status = if semantic["status"] == "unavailable" && semantic["code"] != "provider_starting" {
+        "unavailable"
+    } else if semantic["status"] == "preparing"
+        || semantic["code"] == "provider_starting"
+        || catalog.pending_indexes > 0
+    {
+        "preparing"
+    } else if !catalog.complete {
+        "partial"
+    } else {
+        "ready"
+    };
+    Ok(
+        json!({"status":status,"scope":"source_metadata","catalog":catalog,"generation":generation,"semantic":semantic}),
+    )
+}
+
+#[cfg(test)]
+mod semantic_tests;
 #[cfg(test)]
 mod tests;

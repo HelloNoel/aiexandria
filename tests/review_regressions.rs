@@ -161,8 +161,8 @@ mod tests {
     fn unicode_output_is_truncated_safely() {
         let result = std::panic::catch_unwind(|| {
             run_command(
-                &policy("^/usr/bin/python3 ", 10),
-                &args(&["/usr/bin/python3", "-c", "print('€'*90000)"]),
+                &policy("^python3 ", 10),
+                &args(&["python3", "-c", "print('€'*90000)"]),
                 "",
                 Path::new("/tmp"),
                 &[],
@@ -175,9 +175,9 @@ mod tests {
     fn pipe_descendant_obeys_timeout() {
         let start = Instant::now();
         let result = run_command(
-            &policy("^/usr/bin/python3 ", 1),
+            &policy("^python3 ", 1),
             &args(&[
-                "/usr/bin/python3",
+                "python3",
                 "-c",
                 "import subprocess; subprocess.Popen(['/bin/sleep','2'])",
             ]),
@@ -388,9 +388,9 @@ mod tests {
     #[test]
     fn command_stderr_is_bounded() {
         let error = run_command(
-            &policy("^/usr/bin/python3 ", 10),
+            &policy("^python3 ", 10),
             &args(&[
-                "/usr/bin/python3",
+                "python3",
                 "-c",
                 "import sys; sys.stderr.write('x'*1000000); sys.exit(1)",
             ]),

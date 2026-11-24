@@ -195,44 +195,73 @@ impl SearchService {
 
 impl Prepared {
     pub fn execute(&self, query: &str, mode: Mode, limit: usize) -> Result<Value> {
+        self.execute_with_fallback(query, mode, limit, super::Fallback::None)
+    }
+
+    pub fn execute_with_fallback(
+        &self,
+        query: &str,
+        requested: Mode,
+        limit: usize,
+        fallback: super::Fallback,
+    ) -> Result<Value> {
         let inner = &self.service.inner;
+        let mode = requested.resolve(inner.config.embedding.is_some());
         let deadline = Instant::now() + Duration::from_secs(inner.config.global_timeout_secs);
-        let mut semantic = json!({"status":"not_requested"});
+        let mut semantic = json!({"status":"not_configured"});
         let mut vector = None;
         let mut model = String::new();
         if mode != Mode::Keyword {
-            semantic = json!({"status":"not_configured"});
             if let Some(provider) = &inner.config.embedding {
                 model = provider.identity();
-                semantic = json!({"status":"preparing","retry_after_ms":2000});
-                if !self.sources.is_empty() {
-                    if let Some(dimensions) = inner.store.dimensions(&model)? {
+                semantic = json!({"status":"preparing"});
+                self.service.request_embeddings();
+                if let Some(dimensions) = inner.store.dimensions(&model)? {
+                    if !self.sources.is_empty() {
                         let priority = lock_file(&inner.locks.join("query-priority.lock"))?;
                         priority.lock_shared()?;
                         let remaining = deadline.saturating_duration_since(Instant::now());
-                        // Keep time for useful keyword fallback when a hybrid provider stalls.
-                        let provider_budget = if mode == Mode::Hybrid {
+                        let budget = if fallback == super::Fallback::Keyword {
                             remaining.saturating_sub((remaining / 4).min(Duration::from_secs(1)))
                         } else {
                             remaining
                         };
-                        match provider.embed_with_timeout(&[query.into()], true, provider_budget) {
+                        match provider.embed_with_timeout(&[query.into()], true, budget) {
                             Ok(mut values) if values[0].len() == dimensions => {
                                 vector = values.pop()
                             }
                             Ok(_) => {
-                                semantic = json!({"status":"unavailable","message":"Embedding dimensions changed; configure a new model revision."})
+                                semantic = json!({"status":"unavailable","code":"model_mismatch","retryable":false,"message":"Embedding dimensions changed; configure a new model revision."})
                             }
                             Err(error) => {
-                                semantic =
-                                    json!({"status":"unavailable","message":error.to_string()})
+                                semantic = super::provider::diagnostic(&error);
+                                semantic["status"] =
+                                    json!(if semantic["code"] == "provider_starting" {
+                                        "preparing"
+                                    } else {
+                                        "unavailable"
+                                    });
                             }
+                        }
+                    }
+                }
+                if vector.is_none() && semantic["status"] == "preparing" {
+                    for source in &self.sources {
+                        if let Some(error) = inner.store.failure(&source.descriptor.id, &model)? {
+                            semantic = super::provider::cached_diagnostic(&error);
+                            semantic["status"] =
+                                json!(if semantic["code"] == "provider_starting" {
+                                    "preparing"
+                                } else {
+                                    "unavailable"
+                                });
+                            break;
                         }
                     }
                 }
             }
         }
-        let result = inner.store.query_global(
+        let mut result = inner.store.query_global(
             &self.sources,
             query,
             mode,
@@ -243,6 +272,44 @@ impl Prepared {
                 deadline,
             },
         )?;
+        let mut used = Mode::Keyword;
+        if mode != Mode::Keyword && vector.is_some() {
+            semantic = json!({"status": if result.embedded_chunks == result.chunks_searched {"ready"} else {"partial"}});
+            used = mode;
+        }
+        if mode != Mode::Keyword && semantic["status"] == "partial" {
+            self.service.request_embeddings();
+            for source in &self.sources {
+                if let Some(error) = inner.store.failure(&source.descriptor.id, &model)? {
+                    semantic = super::provider::cached_diagnostic(&error);
+                    semantic["status"] = json!(if semantic["code"] == "provider_starting" {
+                        "preparing"
+                    } else {
+                        "unavailable"
+                    });
+                    break;
+                }
+            }
+        }
+        if mode != Mode::Keyword
+            && semantic["status"] != "ready"
+            && fallback == super::Fallback::Keyword
+        {
+            // An explicit fallback is a consistent keyword ranking of the scope,
+            // not a silently uneven mix of vector-ready and keyword-only files.
+            result = inner.store.query_global(
+                &self.sources,
+                query,
+                Mode::Keyword,
+                None,
+                QueryOptions {
+                    limit,
+                    max_chunks: inner.config.global_max_chunks,
+                    deadline,
+                },
+            )?;
+            used = Mode::Keyword;
+        }
         let mut coverage = self.coverage.clone();
         coverage.sources_searched = result.sources_searched;
         coverage.pending_sources += result.changed_sources;
@@ -250,12 +317,6 @@ impl Prepared {
         coverage.chunks_searched = result.chunks_searched;
         coverage.embedded_chunks = result.embedded_chunks;
         coverage.limited |= result.limited;
-        let used = if result.embedded_chunks > 0 && vector.is_some() {
-            semantic = json!({"status": if result.embedded_chunks == result.chunks_searched {"ready"} else {"partial"}});
-            mode
-        } else {
-            Mode::Keyword
-        };
         coverage.partial = coverage.limited
             || coverage.pending_sources > 0
             || coverage.unavailable_sources > 0
@@ -263,39 +324,29 @@ impl Prepared {
             || coverage.uncached_repositories > 0
             || coverage.partial_sources > 0
             || (mode != Mode::Keyword && result.embedded_chunks < result.chunks_searched);
-        let mut status = "ready";
-        let mut message = None;
-        if result.timed_out {
-            status = "limited";
-            message = Some("Global search reached its work deadline; narrow indexes or source_ids, or increase global_timeout_secs.");
-        } else if mode == Mode::Semantic
-            && (vector.is_none() || result.embedded_chunks == 0)
-            && !self.sources.is_empty()
+        let mut value = json!({"status":"ready", "scope":"global", "mode_used":used,
+            "semantic":semantic, "coverage":coverage, "hits":result.hits,"truncated":result.truncated});
+        value = super::response::finish(value, requested, mode, fallback);
+        if result.timed_out && value["status"] != "unavailable" {
+            value["status"] = json!("limited");
+            value["message"] = json!("Global search reached its work deadline; narrow indexes or source_ids, or increase global_timeout_secs.");
+        } else if coverage.sources_searched == 0
+            && coverage.partial
+            && value["status"] != "unavailable"
         {
-            status = if semantic["status"] == "preparing" {
-                "preparing"
-            } else {
-                "unavailable"
-            };
-        } else if coverage.sources_searched == 0 && coverage.partial {
-            status = if coverage.limited {
+            value["status"] = json!(if coverage.limited {
                 "limited"
             } else if coverage.pending_sources > 0 {
                 "preparing"
             } else {
                 "unavailable"
-            };
-            message = Some("No current indexed sources were searched; prepare documentation with update --semantic, or narrow the requested scope.");
+            });
+            value["mode_used"] = Value::Null;
+            value["message"] = json!("No current indexed sources were searched; prepare documentation with update --semantic, or narrow the requested scope.");
         }
-        let mut response = json!({"status":status,"scope":"global","mode_requested":mode,
-            "mode_used":if mode == Mode::Semantic && used != Mode::Semantic { None } else { Some(used) },
-            "semantic":semantic,"coverage":coverage,"hits":result.hits,"truncated":result.truncated});
-        if let Some(message) = message {
-            response["message"] = json!(message);
+        if value["status"] == "preparing" {
+            value["retry_after_ms"] = json!(2000);
         }
-        if status == "preparing" {
-            response["retry_after_ms"] = json!(2000);
-        }
-        Ok(response)
+        Ok(value)
     }
 }

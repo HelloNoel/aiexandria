@@ -7,7 +7,7 @@ Homebrew installation below installs Git automatically; for manual installs,
 install Git separately and check `git --version`. Git must be available on the
 MCP process's PATH; GUI clients may use a different PATH from your terminal. You
 can select an absolute Git path with `--git` or `AIEXANDRIA_GIT`. This is a new
-runtime requirement in v0.4.0.
+runtime requirement since v0.4.0.
 
 The default setup needs no embedding service, database installation or Git
 hosting account. Ripgrep is only required by sources whose custom commands
@@ -49,15 +49,15 @@ pass the Git path printed by `brew --prefix git` followed by `/bin/git` using
 ## Download a binary
 
 Download one archive and SHA256SUMS from the
-[v0.4.0 release](https://github.com/HelloNoel/aiexandria/releases/tag/v0.4.0).
+[v0.5.0 release](https://github.com/HelloNoel/aiexandria/releases/tag/v0.5.0).
 
 | Platform            | Archive                                            |
 | ------------------- | -------------------------------------------------- |
-| macOS Apple Silicon | aiexandria-v0.4.0-aarch64-apple-darwin.tar.gz      |
-| macOS Intel         | aiexandria-v0.4.0-x86_64-apple-darwin.tar.gz       |
-| Linux ARM64         | aiexandria-v0.4.0-aarch64-unknown-linux-gnu.tar.gz |
-| Linux x86-64        | aiexandria-v0.4.0-x86_64-unknown-linux-gnu.tar.gz  |
-| Windows x86-64      | aiexandria-v0.4.0-x86_64-pc-windows-gnu.zip        |
+| macOS Apple Silicon | aiexandria-v0.5.0-aarch64-apple-darwin.tar.gz      |
+| macOS Intel         | aiexandria-v0.5.0-x86_64-apple-darwin.tar.gz       |
+| Linux ARM64         | aiexandria-v0.5.0-aarch64-unknown-linux-gnu.tar.gz |
+| Linux x86-64        | aiexandria-v0.5.0-x86_64-unknown-linux-gnu.tar.gz  |
+| Windows x86-64      | aiexandria-v0.5.0-x86_64-pc-windows-gnu.zip        |
 
 The word unknown in a Linux filename is part of Rust's target name. GNU Linux
 builds require glibc; they are not Alpine/musl binaries.
@@ -68,8 +68,8 @@ Run these commands in your download directory. Substitute x86_64 for aarch64 on
 Intel Macs:
 
 ```sh
-shasum -a 256 aiexandria-v0.4.0-aarch64-apple-darwin.tar.gz
-tar -xzf aiexandria-v0.4.0-aarch64-apple-darwin.tar.gz
+shasum -a 256 aiexandria-v0.5.0-aarch64-apple-darwin.tar.gz
+tar -xzf aiexandria-v0.5.0-aarch64-apple-darwin.tar.gz
 mkdir -p ~/.local/bin
 mv aiexandria ~/.local/bin/
 ~/.local/bin/aiexandria --version
@@ -89,8 +89,8 @@ xattr -d com.apple.quarantine ~/.local/bin/aiexandria
 For x86-64, run the following. Substitute aarch64 for x86_64 on ARM64:
 
 ```sh
-sha256sum aiexandria-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf aiexandria-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
+sha256sum aiexandria-v0.5.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf aiexandria-v0.5.0-x86_64-unknown-linux-gnu.tar.gz
 mkdir -p ~/.local/bin
 mv aiexandria ~/.local/bin/
 ~/.local/bin/aiexandria --version
@@ -104,8 +104,8 @@ executable's absolute path.
 In PowerShell, from your download directory:
 
 ```powershell
-Get-FileHash .\aiexandria-v0.4.0-x86_64-pc-windows-gnu.zip -Algorithm SHA256
-Expand-Archive .\aiexandria-v0.4.0-x86_64-pc-windows-gnu.zip -DestinationPath "$env:LOCALAPPDATA\Programs\AIexandria"
+Get-FileHash .\aiexandria-v0.5.0-x86_64-pc-windows-gnu.zip -Algorithm SHA256
+Expand-Archive .\aiexandria-v0.5.0-x86_64-pc-windows-gnu.zip -DestinationPath "$env:LOCALAPPDATA\Programs\AIexandria"
 & "$env:LOCALAPPDATA\Programs\AIexandria\aiexandria.exe" --version
 ```
 
@@ -177,11 +177,11 @@ MinGW toolchain.
 ```sh
 git clone https://github.com/HelloNoel/aiexandria.git
 cd aiexandria
-git checkout v0.4.0
+git checkout v0.5.0
 cargo install --path . --locked
 ```
 
 This installs into Cargo's bin directory. Ensure both AIexandria and Git are
 available to the MCP client. See
-[CONTRIBUTING.md](https://github.com/HelloNoel/aiexandria/blob/v0.4.0/CONTRIBUTING.md)
+[CONTRIBUTING.md](https://github.com/HelloNoel/aiexandria/blob/v0.5.0/CONTRIBUTING.md)
 for development test dependencies.

@@ -18,10 +18,10 @@ publish a repository to try it.
 - [Configure and troubleshoot](configuration.md).
 - [Look up commands and tools](reference.md).
 
-This guide describes **v0.4.0**. This release adds searches that remain
-available during refreshes, repository updates, SHA-256 repository support, and
-optional keyword, semantic and global passage search. It requires Git 2.43.7 or
-newer.
+This guide describes **v0.5.0**. This release adds hybrid source discovery,
+automatic local embedding-provider startup, and explicit semantic-search
+failures. Search defaults prefer hybrid retrieval when a provider is configured.
+It requires Git 2.43.7 or newer.
 
 Discovery and the public starter collection were introduced in v0.3.0. The
 [v0.3.0 guide](https://github.com/HelloNoel/aiexandria/blob/v0.3.0/docs/getting-started.md)

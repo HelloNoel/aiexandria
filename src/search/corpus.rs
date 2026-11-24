@@ -50,7 +50,7 @@ impl Descriptor {
             repo: None,
         }
     }
-    fn repository(
+    pub(crate) fn repository(
         index: &str,
         path: &[String],
         id: &str,
@@ -66,8 +66,8 @@ impl Descriptor {
             .trim_end_matches(".git");
         Self {
             id: format!("cached:{}", digest(serde_json::to_vec(&(index, path, repo)).unwrap())),
-            name: format!("{name} ({}): cached documentation", repo.commit.as_deref().or(repo.tag.as_deref()).or(repo.branch.as_deref()).unwrap_or("default branch")),
-            description: format!("{}. {} Available documentation files selected automatically; independent of custom command scopes.", level.name, level.description.as_deref().unwrap_or("").chars().take(512).collect::<String>()),
+            name: format!("{} — {name} ({}): repository documentation", level.find(id).map_or(name, |entry| entry.view.name.as_str()), repo.commit.as_deref().or(repo.tag.as_deref()).or(repo.branch.as_deref()).unwrap_or("default branch")),
+            description: format!("{}. {} Repository documentation selected automatically; its file scope differs from custom commands. Selecting this source can prepare its repository if uncached.", level.name, level.description.as_deref().unwrap_or("").chars().take(512).collect::<String>()),
             route: Route { index: index.into(), path: path.to_vec(), entry_id: id.into() }, repo: Some(repo.clone()),
         }
     }
@@ -143,6 +143,23 @@ pub fn inventory(
     selected_index: Option<&str>,
     start_path: &[String],
 ) -> Inventory {
+    inventory_impl(cache, registry, deadline, selected_index, start_path, false)
+}
+
+/// Discover ranked routes through cached index metadata, including repositories
+/// that have never been acquired. Merely discovering them performs no Git work.
+pub fn registered(cache: &RepoCache, registry: &RegistryConfig, deadline: Instant) -> Inventory {
+    inventory_impl(cache, registry, deadline, None, &[], true)
+}
+
+fn inventory_impl(
+    cache: &RepoCache,
+    registry: &RegistryConfig,
+    deadline: Instant,
+    selected_index: Option<&str>,
+    start_path: &[String],
+    include_uncached: bool,
+) -> Inventory {
     let mut inventory = Inventory::default();
     let cache = cache.cached_only();
     let mut found = BTreeMap::new();
@@ -186,7 +203,11 @@ pub fn inventory(
                         pending.push(next);
                     }
                     EntryKind::Doc { .. } | EntryKind::Command { .. } => {
-                        if cache.cached_snapshot(&entry.origin, entry.refresh).is_ok() {
+                        let cached = cache.cached_snapshot(&entry.origin, entry.refresh).is_ok();
+                        if !cached {
+                            uncached.insert(cache.path_for(&entry.origin));
+                        }
+                        if cached || include_uncached {
                             let source = Descriptor::repository(
                                 index,
                                 &path,
@@ -195,8 +216,6 @@ pub fn inventory(
                                 &loaded,
                             );
                             found.entry(source.id.clone()).or_insert(source);
-                        } else {
-                            uncached.insert(cache.path_for(&entry.origin));
                         }
                     }
                     _ => {}

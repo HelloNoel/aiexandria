@@ -57,6 +57,13 @@ pub enum AIexError {
     #[error("index traversal limit reached: {0}")]
     TraversalLimit(&'static str),
 
+    #[error("{message}")]
+    Embedding {
+        code: String,
+        message: String,
+        retryable: bool,
+    },
+
     #[error("{0}")]
     Other(String),
 }

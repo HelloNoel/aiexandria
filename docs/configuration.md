@@ -1,6 +1,6 @@
 # Configuration and troubleshooting
 
-AIexandria v0.4.0 requires Git 2.43.7 or newer. Existing registries continue to
+AIexandria v0.5.0 requires Git 2.43.7 or newer. Existing registries continue to
 work; ranked search is configured separately and is optional.
 
 ## Registry selection
@@ -110,10 +110,15 @@ Failed acquisitions return explicit tool errors. Cached content remains usable
 after a refresh failure, with freshness metadata. Pending preparation is not an
 empty search.
 
-**Search finds nothing:** built-in search uses a case-insensitive substring, not
-Boolean expressions. Select the right source, try a distinctive term, and enable
-deep: true to search listed current-level documents. Commands can use other
-query languages; follow their descriptions.
+**Search finds nothing:** ranked search covers indexed cached documents. Check
+coverage and prepare the intended source before changing the query. For legacy
+substring search over listed current-level documents, use `deep: true`. Custom
+commands can use other query languages; follow their descriptions.
+
+**Embedding provider failed:** semantic and hybrid requests fail explicitly.
+Check the reported diagnostics and `aiexandria embedding status`. With a startup
+command configured, `aiexandria embedding start` starts or reuses the provider.
+Request `fallback: keyword` only when degraded keyword results are acceptable.
 
 **Git missing or too old:** install Git 2.43.7 or newer and make it available on
 the MCP process's PATH, or set --git /absolute/path/to/git / AIEXANDRIA_GIT. A

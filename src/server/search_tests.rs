@@ -199,7 +199,7 @@ async fn failed_refresh_does_not_silently_search_cached_metadata() {
     expire(&fixture.cached);
     std::fs::rename(&fixture.remote, fixture.remote.with_file_name("offline")).unwrap();
     let error = fixture
-        .search(json!({"index":"docs", "query":"Search", "freshness":"require_fresh"}))
+        .search(json!({"index":"docs", "query":"Search", "deep":true, "freshness":"require_fresh"}))
         .await
         .unwrap();
     assert_eq!(error.is_error, Some(true));
@@ -234,7 +234,13 @@ async fn referenced_command_and_deep_doc_repositories_share_the_deadline() {
         .unwrap();
     assert_pending(&deep);
     fixture
-        .search(json!({"index":"docs", "query":"Doc", "freshness":"require_fresh", "refresh_wait_ms":60}))
+        .server
+        .list_docs(Parameters(
+            serde_json::from_value(
+                json!({"index":"docs", "freshness":"require_fresh", "refresh_wait_ms":60}),
+            )
+            .unwrap(),
+        ))
         .await
         .unwrap();
     drop(gate);
@@ -333,7 +339,7 @@ async fn never_and_pinned_indexes_do_not_wait_for_an_unnecessary_refresh() {
     std::fs::rename(&fixture.remote, fixture.remote.with_file_name("offline")).unwrap();
     for name in ["never", "pinned"] {
         let request = Parameters(
-            serde_json::from_value(json!({"index":name, "query":"Search", "freshness":"require_fresh", "refresh_wait_ms":100}))
+            serde_json::from_value(json!({"index":name, "query":"Search", "deep":true, "freshness":"require_fresh", "refresh_wait_ms":100}))
                 .unwrap(),
         );
         server.search_docs(request).await.unwrap();
@@ -447,22 +453,27 @@ async fn ranked_discovery_search_and_snapshot_read_preserve_legacy_search() {
         .get("mode_used")
         .is_none());
     let fallback = fixture
-        .search(json!({"index":"docs", "query":"Squirrels", "mode":"hybrid"}))
+        .search(json!({"index":"docs", "query":"Squirrels", "mode":"hybrid", "fallback":"keyword"}))
         .await
         .unwrap()
         .structured_content
         .unwrap();
     assert_eq!(fallback["mode_used"], "keyword");
+    assert_eq!(fallback["status"], "degraded");
     assert_eq!(fallback["semantic"]["status"], "not_configured");
 }
 
 #[tokio::test]
 async fn ranked_requests_validate_bounds_scopes_and_refresh_deadlines() {
     let mut fixture = Fixture::with_files(RANKED, &[("guide.md", "Squirrels gather acorns.\n")]);
-    assert!(fixture
-        .search(json!({"index":"docs", "query":"Squirrels", "mode":"keyword"}))
-        .await
-        .is_err());
+    assert!(
+        fixture
+            .search(json!({"index":"docs", "query":"Squirrels", "mode":"keyword"}))
+            .await
+            .unwrap()
+            .is_error
+            == Some(true)
+    );
     fixture.server = fixture
         .server
         .with_search(crate::search::config::SearchConfig {
@@ -502,6 +513,61 @@ async fn ranked_requests_validate_bounds_scopes_and_refresh_deadlines() {
     assert!(started.elapsed() < Duration::from_secs(1));
     drop(gate);
     fixture.finish_refresh(&fixture.origin).await;
+}
+
+#[tokio::test]
+async fn discovery_recommends_uncached_ranked_sources_without_running_commands() {
+    let external = tempfile::tempdir().unwrap();
+    let origin = repo(
+        &external.path().join("external"),
+        &[(
+            "guide.md",
+            "# Cold platform\nNeedle evidence for provisioning.\n",
+        )],
+    );
+    let body = format!("version: 1\nname: Cold platform\ncommand_policy: {{allow: '^git init -- marker$'}}\nentries:\n- {{id: search, name: Cold platform, kind: command, argv: [git, init, --, marker], repo: {{url: '{}', branch: main}}}}\n", origin.url);
+    let mut fixture = Fixture::new(&body);
+    fixture.server = fixture
+        .server
+        .with_search(crate::search::config::SearchConfig {
+            enabled: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let cached = fixture.server.inner.cache.path_for(&origin);
+    let discovery = fixture
+        .server
+        .discover_sources(Parameters(
+            serde_json::from_value(json!({
+                "query":"Cold platform", "kinds":["command"]
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let value: Value = serde_json::from_str(&discovery.content[0].as_text().unwrap().text).unwrap();
+    let source = &value["sources"][0];
+    assert_eq!(source["search"]["command_id"], "search");
+    assert_eq!(source["recommended_search"]["mode"], "auto");
+    assert!(source["ranked_scope"].as_str().unwrap().contains("differ"));
+    assert!(!cached.exists(), "discovery started a Git acquisition");
+    let mut request = source["recommended_search"].clone();
+    request["query"] = json!("Needle evidence");
+    let result = fixture.search(request).await.unwrap();
+    assert_ne!(result.is_error, Some(true));
+    let result = result.structured_content.unwrap();
+    assert_eq!(result["mode_used"], "keyword");
+    assert_eq!(result["hits"][0]["file"], "guide.md");
+    let dir = fixture
+        .server
+        .inner
+        .cache
+        .cached_snapshot(&origin, RefreshPolicy::Never)
+        .unwrap();
+    assert!(
+        !dir.join("marker").exists(),
+        "ranked acquisition executed a custom command"
+    );
 }
 
 #[tokio::test]
@@ -638,8 +704,12 @@ async fn global_mcp_search_filters_and_reads_snapshots_across_repositories() {
             .extend(invalid.as_object().unwrap().clone());
         assert!(fixture.search(request).await.is_err());
     }
-    assert!(fixture
+    let implicit = fixture
         .search(json!({"indexes":["docs"],"query":"consistency"}))
         .await
-        .is_err());
+        .unwrap();
+    assert_eq!(
+        implicit.structured_content.unwrap()["mode_resolved"],
+        "keyword"
+    );
 }

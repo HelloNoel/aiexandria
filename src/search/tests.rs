@@ -240,6 +240,7 @@ impl MockProvider {
             query_prefix: "query: ".into(),
             document_prefix: "document: ".into(),
             timeout_secs: 2,
+            startup: None,
         }
     }
 }
@@ -310,7 +311,14 @@ fn cache_only_inventory_never_hydrates_or_starts_git_work() {
         .update(None, &[], None, Instant::now() + Duration::from_secs(10))
         .unwrap();
     assert!(report.errors.is_empty());
-    assert!(service.sources().is_empty());
+    let sources = service.sources();
+    assert!(
+        !sources.is_empty(),
+        "cached metadata should expose uncached ranked routes"
+    );
+    assert!(sources.iter().all(|source| service
+        .coverage(&source.id)
+        .is_none_or(|c| c.indexed_files == 0)));
     assert_eq!(f.cache.state(&f.origin).unwrap().current, selected.current);
     let cached = f.cache.cached_only().ensure_path(
         &f.origin,
@@ -398,7 +406,7 @@ fn cached_corpus_indexes_markdown_extensions_but_still_excludes_dependencies() {
 }
 
 #[test]
-fn hybrid_falls_back_then_reuses_embeddings_and_validates_query_dimensions() {
+fn hybrid_requires_embeddings_unless_fallback_is_explicit_and_validates_dimensions() {
     let f = Fixture::new();
     f.warm();
     let provider = MockProvider::new();
@@ -411,7 +419,15 @@ fn hybrid_falls_back_then_reuses_embeddings_and_validates_query_dimensions() {
     let descriptor = Descriptor::curated("public-docs", &[], &level);
     let (prepared, _) = f.prepare(&service, descriptor.clone());
     let result = prepared.execute("squirrels", Mode::Hybrid, 5).unwrap();
-    assert_eq!(result["mode_used"], "keyword");
+    assert_eq!(result["status"], "preparing");
+    assert!(result["mode_used"].is_null());
+    assert!(result.get("hits").is_none());
+    let fallback = prepared
+        .execute_with_fallback("squirrels", Mode::Hybrid, 5, Fallback::Keyword)
+        .unwrap();
+    assert_eq!(fallback["status"], "degraded");
+    assert_eq!(fallback["mode_used"], "keyword");
+    assert!(!fallback["hits"].as_array().unwrap().is_empty());
     assert_eq!(result["semantic"]["status"], "preparing");
     assert_eq!(
         prepared
@@ -450,8 +466,49 @@ fn hybrid_falls_back_then_reuses_embeddings_and_validates_query_dimensions() {
     drop(requests);
     provider.mismatch.store(true, Ordering::Relaxed);
     let result = prepared.execute("squirrels", Mode::Hybrid, 5).unwrap();
-    assert_eq!(result["mode_used"], "keyword");
+    assert_eq!(result["status"], "unavailable");
+    assert_eq!(result["error"]["code"], "model_mismatch");
+    assert!(result["mode_used"].is_null());
     assert_eq!(result["semantic"]["status"], "unavailable");
+}
+
+#[test]
+fn startup_and_discovery_settings_preserve_existing_index_and_vector_identity() {
+    let fixture = Fixture::new();
+    fixture.warm();
+    let provider = MockProvider::new();
+    let original = provider.config();
+    let service = fixture.service(Some(original.clone()));
+    assert!(service
+        .update(None, &[], None, Instant::now() + Duration::from_secs(10))
+        .unwrap()
+        .errors
+        .is_empty());
+    let count = provider.requests.lock().unwrap().len();
+    let mut managed = original.clone();
+    managed.startup = Some(config::StartupConfig {
+        argv: vec!["not-executed-when-ready".into()],
+        timeout_secs: 60,
+    });
+    assert_eq!(original.identity(), managed.identity());
+    let service = fixture.service(Some(managed));
+    let update = service
+        .update(None, &[], None, Instant::now() + Duration::from_secs(10))
+        .unwrap();
+    assert!(update.errors.is_empty());
+    assert_eq!(update.changed_sources, 0);
+    assert_eq!(update.embedded_chunks, 0);
+    assert_eq!(provider.requests.lock().unwrap().len(), count);
+    let mut config = service.inner.config.clone();
+    config.discovery.default_mode = Mode::Keyword;
+    let service =
+        SearchService::new(config, fixture.registry.clone(), fixture.cache.clone()).unwrap();
+    let update = service
+        .update(None, &[], None, Instant::now() + Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(update.changed_sources, 0);
+    assert_eq!(update.embedded_chunks, 0);
+    assert_eq!(provider.requests.lock().unwrap().len(), count);
 }
 
 #[test]
@@ -601,7 +658,12 @@ fn provider_failure_keeps_keyword_results_available() {
         .unwrap();
     assert!(!report.errors.is_empty());
     let (prepared, _) = f.prepare(&service, service.sources().pop().unwrap());
-    let result = prepared.execute("database", Mode::Hybrid, 5).unwrap();
+    let strict = prepared.execute("database", Mode::Hybrid, 5).unwrap();
+    assert_eq!(strict["status"], "unavailable");
+    assert!(strict.get("hits").is_none());
+    let result = prepared
+        .execute_with_fallback("database", Mode::Hybrid, 5, Fallback::Keyword)
+        .unwrap();
     assert_eq!(result["mode_used"], "keyword");
     assert_eq!(result["semantic"]["status"], "unavailable");
     assert!(!result["hits"].as_array().unwrap().is_empty());

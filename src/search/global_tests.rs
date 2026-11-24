@@ -176,14 +176,20 @@ fn global_query_embeds_once_and_keeps_keyword_fallback() {
     assert_eq!(result["semantic"]["status"], "ready");
     assert_eq!(provider.requests.lock().unwrap().len(), before + 1);
     provider.fail.store(true, Ordering::Relaxed);
-    let fallback = prepared.execute("transactions", Mode::Hybrid, 5).unwrap();
+    let strict = prepared.execute("transactions", Mode::Hybrid, 5).unwrap();
+    assert_eq!(strict["status"], "unavailable");
+    assert!(strict.get("hits").is_none());
+    let fallback = prepared
+        .execute_with_fallback("transactions", Mode::Hybrid, 5, Fallback::Keyword)
+        .unwrap();
+    assert_eq!(fallback["status"], "degraded");
     assert_eq!(fallback["mode_used"], "keyword");
     assert_eq!(fallback["semantic"]["status"], "unavailable");
     assert!(!fallback["hits"].as_array().unwrap().is_empty());
     let semantic = prepared.execute("woodland", Mode::Semantic, 5).unwrap();
     assert_eq!(semantic["status"], "unavailable");
     assert!(semantic["mode_used"].is_null());
-    assert!(semantic["hits"].as_array().unwrap().is_empty());
+    assert!(semantic.get("hits").is_none());
 }
 
 #[test]
@@ -321,15 +327,24 @@ fn slow_global_provider_leaves_time_for_keyword_fallback() {
     let (prepared, _) = prepare(&service, &[], &[]);
     provider.delay_ms.store(1500, Ordering::Relaxed);
     let start = Instant::now();
-    let result = prepared.execute("transactions", Mode::Hybrid, 5).unwrap();
+    let result = prepared
+        .execute_with_fallback("transactions", Mode::Hybrid, 5, Fallback::Keyword)
+        .unwrap();
     assert!(start.elapsed() < Duration::from_millis(1400));
-    assert_eq!(result["status"], "ready");
+    assert_eq!(result["status"], "degraded");
     assert_eq!(result["mode_used"], "keyword");
     assert!(!result["hits"].as_array().unwrap().is_empty());
+    let strict = prepared.execute("transactions", Mode::Hybrid, 5).unwrap();
+    assert_eq!(
+        strict["status"], "unavailable",
+        "the work deadline must not hide a provider timeout"
+    );
+    assert_eq!(strict["error"]["code"], "timeout");
+    assert!(strict.get("hits").is_none());
 }
 
 #[test]
-fn global_hybrid_keeps_ready_vectors_while_another_source_is_preparing() {
+fn global_hybrid_requires_complete_vectors_and_offers_explicit_keyword_fallback() {
     let provider = MockProvider::new();
     let (first, second, service) = collection(SearchConfig {
         enabled: true,
@@ -371,7 +386,15 @@ fn global_hybrid_keeps_ready_vectors_while_another_source_is_preparing() {
     }
     let (prepared, _) = prepare(&service, &[], &[]);
     let result = prepared.execute("transactions", Mode::Hybrid, 5).unwrap();
-    assert_eq!(result["mode_used"], "hybrid");
+    assert_eq!(result["status"], "preparing");
+    assert!(result["mode_used"].is_null());
+    assert!(result.get("hits").is_none());
+    let fallback = prepared
+        .execute_with_fallback("transactions", Mode::Hybrid, 5, Fallback::Keyword)
+        .unwrap();
+    assert_eq!(fallback["status"], "degraded");
+    assert_eq!(fallback["mode_used"], "keyword");
+    assert!(!fallback["hits"].as_array().unwrap().is_empty());
     assert_eq!(result["semantic"]["status"], "partial");
     assert_eq!(result["coverage"]["partial"], true);
     assert!(
@@ -379,7 +402,7 @@ fn global_hybrid_keeps_ready_vectors_while_another_source_is_preparing() {
             < result["coverage"]["chunks_searched"].as_u64().unwrap()
     );
     assert!(
-        result["hits"]
+        fallback["hits"]
             .as_array()
             .unwrap()
             .iter()

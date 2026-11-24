@@ -92,20 +92,6 @@ impl Store {
             .map(|v| v.map(|v| v as usize))
     }
 
-    pub fn descriptors(&self) -> Result<Vec<Descriptor>> {
-        let db = self.connection()?;
-        let mut q = db
-            .prepare("SELECT descriptor FROM sources ORDER BY id")
-            .map_err(db_error)?;
-        let rows = q
-            .query_map([], |r| r.get::<_, String>(0))
-            .map_err(db_error)?;
-        rows.map(|r| {
-            serde_json::from_str(&r.map_err(db_error)?).map_err(|e| AIexError::Other(e.to_string()))
-        })
-        .collect()
-    }
-
     /// Atomically replace membership/FTS rows; content-addressed vectors survive.
     pub fn publish(&self, corpus: &Corpus, chunk_bytes: usize) -> Result<bool> {
         let mut db = self.connection()?;
