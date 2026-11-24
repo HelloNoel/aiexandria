@@ -215,6 +215,13 @@ pub fn ensure_started(
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
+            windows::isolate_stdio().map_err(|error| {
+                failure(
+                    "provider_start_failed",
+                    &format!("Could not isolate embedding supervisor input and output: {error}"),
+                    true,
+                )
+            })?;
             command.creation_flags(0x08000000 | 0x00000200); // no window, new process group
         }
         let mut supervisor = command.spawn().map_err(|_| {

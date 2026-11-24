@@ -19,6 +19,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(delay_ms: u64) -> Self {
+        Self::with_listener(delay_ms).0
+    }
+
+    fn with_listener(delay_ms: u64) -> (Self, TcpListener) {
         let temp = tempfile::tempdir().unwrap();
         let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = reservation.local_addr().unwrap().port();
@@ -35,13 +39,15 @@ impl Fixture {
             "startup":{"argv":[std::env::current_exe().unwrap(),"--exact","mock_provider_process","--nocapture"],"timeout_secs":20}
         }});
         std::fs::write(&config, serde_yaml::to_string(&yaml).unwrap()).unwrap();
-        drop(reservation);
-        Self {
-            temp,
-            config,
-            state,
-            endpoint,
-        }
+        (
+            Self {
+                temp,
+                config,
+                state,
+                endpoint,
+            },
+            reservation,
+        )
     }
 
     fn command(&self) -> Command {
@@ -94,17 +100,36 @@ impl Drop for Fixture {
 
 fn wait(mut child: Child, timeout: Duration) -> Output {
     let deadline = Instant::now() + timeout;
-    loop {
+    let timed_out = loop {
         if child.try_wait().unwrap().is_some() {
-            return child.wait_with_output().unwrap();
+            break false;
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
-            let output = child.wait_with_output().unwrap();
-            panic!("CLI timed out: {}", String::from_utf8_lossy(&output.stderr));
+            break true;
         }
         std::thread::sleep(Duration::from_millis(20));
-    }
+    };
+    // A detached process retaining an inherited pipe writer can keep output
+    // collection blocked even after the CLI exits. Bound that wait as well.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    let output = rx
+        .recv_timeout(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .max(Duration::from_secs(1)),
+        )
+        .expect("CLI output pipes remained open after process exit")
+        .unwrap();
+    assert!(
+        !timed_out,
+        "CLI timed out: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
 }
 
 fn success(output: Output) -> Value {
@@ -199,11 +224,9 @@ fn existing_external_provider_is_reused_and_never_stopped() {
 
 #[test]
 fn unresponsive_external_provider_is_not_replaced() {
-    let fixture = Fixture::new(0);
-    let port = url::Url::parse(&fixture.endpoint).unwrap().port().unwrap();
     // Keep the port open without responding to HTTP. A timeout is not evidence
     // that the port is unused and must never authorize launching another model.
-    let _listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let (fixture, _listener) = Fixture::with_listener(0);
     let result = fixture.cli("start");
     assert!(!result.status.success());
     let stderr = String::from_utf8_lossy(&result.stderr);
@@ -242,13 +265,18 @@ fn conflicting_model_configuration_cannot_spawn_a_second_model() {
     config["embedding"]["revision"] = json!("different-weights");
     let conflicting = fixture.temp.path().join("conflicting.yaml");
     std::fs::write(&conflicting, serde_yaml::to_string(&config).unwrap()).unwrap();
-    let result = Command::new(BIN)
-        .arg("--search-config")
-        .arg(conflicting)
-        .env("AIEXANDRIA_EMBEDDING_STATE", &fixture.state)
-        .args(["embedding", "start"])
-        .output()
-        .unwrap();
+    let result = wait(
+        Command::new(BIN)
+            .arg("--search-config")
+            .arg(conflicting)
+            .env("AIEXANDRIA_EMBEDDING_STATE", &fixture.state)
+            .args(["embedding", "start"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+        Duration::from_secs(30),
+    );
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("different model or revision"));
     assert_eq!(fixture.started(), 1);
