@@ -549,12 +549,21 @@ fn mcp_demand_starts_provider_and_failures_are_visible_in_both_representations()
     std::fs::write(&fixture.config, serde_yaml::to_string(&config).unwrap()).unwrap();
     let mut offline = Mcp::new(&fixture, &registry);
     for fallback in ["none", "keyword"] {
-        let response = offline.rpc(
-            "tools/call",
-            json!({"name":"discover_sources","arguments":{
-                "query":"Certificates","mode":"hybrid","fallback":fallback
-            }}),
-        );
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let response = loop {
+            let response = offline.rpc(
+                "tools/call",
+                json!({"name":"discover_sources","arguments":{
+                    "query":"Certificates","mode":"hybrid","fallback":fallback
+                }}),
+            );
+            let value = ranked_value(&response);
+            if value["status"] != "preparing" {
+                break response;
+            }
+            assert!(Instant::now() < deadline, "{value}");
+            std::thread::sleep(Duration::from_millis(100));
+        };
         let value = ranked_value(&response);
         assert_eq!(response["isError"], fallback == "none");
         assert_eq!(

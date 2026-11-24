@@ -21,6 +21,7 @@ const POLL: Duration = Duration::from_millis(100);
 // Windows retries refused loopback connections for about a second. Allow the
 // refusal to arrive: a generic timeout must not authorize another model.
 const PROBE: Duration = Duration::from_secs(3);
+const HANDOFF: Duration = Duration::from_secs(10);
 const FAILURE_BACKOFF_MS: u64 = 30_000;
 
 #[derive(Serialize, Deserialize)]
@@ -111,6 +112,19 @@ fn check_contract(dir: &Path, config: &EmbeddingConfig) -> Result<()> {
         return Err(failure("provider_configuration_conflict", "This local port is already owned by a different model or revision. Stop that managed provider before changing models.", false));
     }
     Ok(())
+}
+
+/// Explicit CLI starts allow setup time in addition to the model warmup budget.
+pub fn start(config: &EmbeddingConfig) -> Result<()> {
+    let timeout = config.startup.as_ref().map_or_else(
+        || Duration::from_secs(config.timeout_secs),
+        |startup| {
+            // Two admission probes, the supervisor's probe, and a final status
+            // probe must not consume the configured model readiness window.
+            Duration::from_secs(startup.timeout_secs) + HANDOFF + PROBE * 4
+        },
+    );
+    ensure_started(config, Instant::now() + timeout, true)
 }
 
 /// A caller's deadline bounds its wait, not the shared startup job's lifetime.
@@ -233,7 +247,7 @@ pub fn ensure_started(
         })?;
         // Keep admission until the supervisor owns the lifetime lock. Otherwise
         // a second caller could spawn another supervisor in the handoff gap.
-        let handoff = Instant::now() + Duration::from_secs(startup.timeout_secs.min(10));
+        let handoff = Instant::now() + Duration::from_secs(startup.timeout_secs).min(HANDOFF);
         while try_lock(&dir.join("owner.lock"))?.is_some() {
             if supervisor.try_wait()?.is_some() {
                 return Err(record(&dir).map(|s| recorded_error(&s)).unwrap_or_else(|| {

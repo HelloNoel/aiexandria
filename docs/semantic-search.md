@@ -188,6 +188,10 @@ aiexandria embedding status
 aiexandria embedding stop
 ```
 
+`startup.timeout_secs` limits model readiness after launch. The `embedding start`
+command also allows time for connection checks and supervisor startup. MCP
+requests retain their own request deadlines while shared startup continues.
+
 These commands use the same search configuration as MCP and return JSON. Status
 reports readiness, ownership, startup diagnostics and the log location. Stop
 addresses only an AIexandria-owned supervisor; it never kills a process using a

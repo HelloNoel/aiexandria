@@ -250,15 +250,7 @@ async fn run_subcommand(cli: &Cli, cmd: &Command) -> Result<()> {
             .context("configure embedding in search.yaml")?;
             let result = match action {
                 EmbeddingAction::Start => {
-                    let timeout = embedding
-                        .startup
-                        .as_ref()
-                        .map_or(embedding.timeout_secs, |s| s.timeout_secs);
-                    aiexandria::search::lifecycle::ensure_started(
-                        &embedding,
-                        std::time::Instant::now() + std::time::Duration::from_secs(timeout),
-                        true,
-                    )?;
+                    aiexandria::search::lifecycle::start(&embedding)?;
                     aiexandria::search::lifecycle::status(&embedding)?
                 }
                 EmbeddingAction::Status => aiexandria::search::lifecycle::status(&embedding)?,
